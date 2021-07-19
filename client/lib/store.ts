@@ -34,7 +34,7 @@ export class Store<T> {
     if (!this.watchedNodes[path]) {
       this.watchedNodes[path] = new BehaviorSubject(getValueByPointer(this.cache.data, path))
     }
-    return this.watchedNodes[path]
+    return this.watchedNodes[path].asObservable()
   }
 
   update (update: Update<T>): void {
