@@ -159,17 +159,20 @@ impl<Parent: DbHandle + Send + Sync> DbHandle for Transaction<Parent> {
         &mut self,
         ptr: &JsonPointer<S, V>,
         lock: LockType,
+        deep: bool,
     ) {
         match lock {
             LockType::None => (),
             LockType::Read => {
                 let (locker, mut locks) = self.parent.locker_and_locks();
-                locker.add_read_lock(ptr, &mut self.locks, &mut locks).await
+                locker
+                    .add_read_lock(ptr, &mut self.locks, &mut locks, deep)
+                    .await
             }
             LockType::Write => {
                 let (locker, mut locks) = self.parent.locker_and_locks();
                 locker
-                    .add_write_lock(ptr, &mut self.locks, &mut locks)
+                    .add_write_lock(ptr, &mut self.locks, &mut locks, deep)
                     .await
             }
         }

@@ -64,11 +64,13 @@ where
     T: Serialize + for<'de> Deserialize<'de>,
 {
     pub async fn lock<Db: DbHandle>(&self, db: &mut Db, lock: LockType) {
-        db.lock(&self.ptr, lock).await
+        db.lock(&self.ptr, lock, true).await
     }
 
-    pub async fn get<Db: DbHandle>(&self, db: &mut Db) -> Result<ModelData<T>, Error> {
-        self.lock(db, LockType::Read).await;
+    pub async fn get<Db: DbHandle>(&self, db: &mut Db, lock: bool) -> Result<ModelData<T>, Error> {
+        if lock {
+            self.lock(db, LockType::Read).await;
+        }
         Ok(ModelData(db.get(&self.ptr).await?))
     }
 
@@ -202,11 +204,17 @@ impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> HasModel for Box<T> {
 pub struct OptionModel<T: HasModel + Serialize + for<'de> Deserialize<'de>>(T::Model);
 impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> OptionModel<T> {
     pub async fn lock<Db: DbHandle>(&self, db: &mut Db, lock: LockType) {
-        db.lock(self.0.as_ref(), lock).await
+        db.lock(self.0.as_ref(), lock, true).await
     }
 
-    pub async fn get<Db: DbHandle>(&self, db: &mut Db) -> Result<ModelData<Option<T>>, Error> {
-        self.lock(db, LockType::Read).await;
+    pub async fn get<Db: DbHandle>(
+        &self,
+        db: &mut Db,
+        lock: bool,
+    ) -> Result<ModelData<Option<T>>, Error> {
+        if lock {
+            self.lock(db, LockType::Read).await;
+        }
         Ok(ModelData(db.get(self.0.as_ref()).await?))
     }
 
@@ -224,8 +232,10 @@ impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> OptionModel<T> {
         })
     }
 
-    pub async fn exists<Db: DbHandle>(&self, db: &mut Db) -> Result<bool, Error> {
-        self.lock(db, LockType::Read).await;
+    pub async fn exists<Db: DbHandle>(&self, db: &mut Db, lock: bool) -> Result<bool, Error> {
+        if lock {
+            db.lock(self.0.as_ref(), LockType::Read, false).await;
+        }
         Ok(db.exists(&self.as_ref(), None).await?)
     }
 
@@ -252,7 +262,7 @@ impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> OptionModel<T> {
     }
 
     pub async fn check<Db: DbHandle>(self, db: &mut Db) -> Result<Option<T::Model>, Error> {
-        Ok(if self.exists(db).await? {
+        Ok(if self.exists(db, true).await? {
             Some(self.0)
         } else {
             None
@@ -260,7 +270,7 @@ impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> OptionModel<T> {
     }
 
     pub async fn expect<Db: DbHandle>(self, db: &mut Db) -> Result<T::Model, Error> {
-        if self.exists(db).await? {
+        if self.exists(db, true).await? {
             Ok(self.0)
         } else {
             Err(Error::NodeDoesNotExist(self.0.into()))
@@ -268,7 +278,7 @@ impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> OptionModel<T> {
     }
 
     pub async fn delete<Db: DbHandle>(&self, db: &mut Db) -> Result<(), Error> {
-        db.lock(self.as_ref(), LockType::Write).await;
+        db.lock(self.as_ref(), LockType::Write, true).await;
         db.put(self.as_ref(), &Value::Null).await
     }
 }
@@ -277,7 +287,7 @@ where
     T: Serialize + for<'de> Deserialize<'de> + Send + Sync + HasModel,
 {
     pub async fn put<Db: DbHandle>(&self, db: &mut Db, value: &T) -> Result<(), Error> {
-        db.lock(self.as_ref(), LockType::Write).await;
+        db.lock(self.as_ref(), LockType::Write, true).await;
         db.put(self.as_ref(), value).await
     }
 }
@@ -435,8 +445,14 @@ where
     T::Key: Hash + Eq + for<'de> Deserialize<'de>,
     T::Value: Serialize + for<'de> Deserialize<'de>,
 {
-    pub async fn keys<Db: DbHandle>(&self, db: &mut Db) -> Result<IndexSet<T::Key>, Error> {
-        db.lock(self.as_ref(), LockType::Read).await;
+    pub async fn keys<Db: DbHandle>(
+        &self,
+        db: &mut Db,
+        lock: bool,
+    ) -> Result<IndexSet<T::Key>, Error> {
+        if lock {
+            db.lock(self.as_ref(), LockType::Read, false).await;
+        }
         let set = db.keys(self.as_ref(), None).await?;
         Ok(set
             .into_iter()
