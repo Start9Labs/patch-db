@@ -14,7 +14,7 @@ use crate::{
 use crate::{patch::DiffPatch, Error};
 
 #[async_trait]
-pub trait DbHandle: Sized + Send + Sync {
+pub trait DbHandle: Send + Sync {
     async fn begin<'a>(&'a mut self) -> Result<Transaction<&'a mut Self>, Error>;
     fn rebase(&mut self) -> Result<(), Error>;
     fn store(&self) -> Arc<RwLock<Store>>;
@@ -45,6 +45,7 @@ pub trait DbHandle: Sized + Send + Sync {
         &mut self,
         ptr: &JsonPointer<S, V>,
         lock: LockType,
+        deep: bool,
     ) -> ();
     async fn get<
         T: for<'de> Deserialize<'de>,
@@ -65,7 +66,7 @@ pub trait DbHandle: Sized + Send + Sync {
     ) -> Result<(), Error>;
 }
 #[async_trait]
-impl<Handle: DbHandle + Send + Sync> DbHandle for &mut Handle {
+impl<Handle: DbHandle + ?Sized> DbHandle for &mut Handle {
     async fn begin<'a>(&'a mut self) -> Result<Transaction<&'a mut Self>, Error> {
         let Transaction {
             locks,
@@ -127,8 +128,9 @@ impl<Handle: DbHandle + Send + Sync> DbHandle for &mut Handle {
         &mut self,
         ptr: &JsonPointer<S, V>,
         lock: LockType,
+        deep: bool,
     ) {
-        (*self).lock(ptr, lock).await
+        (*self).lock(ptr, lock, deep).await
     }
     async fn get<
         T: for<'de> Deserialize<'de>,
@@ -229,18 +231,19 @@ impl DbHandle for PatchDbHandle {
         &mut self,
         ptr: &JsonPointer<S, V>,
         lock: LockType,
+        deep: bool,
     ) {
         match lock {
             LockType::Read => {
                 self.db
                     .locker
-                    .add_read_lock(ptr, &mut self.locks, &mut [])
+                    .add_read_lock(ptr, &mut self.locks, &mut [], deep)
                     .await;
             }
             LockType::Write => {
                 self.db
                     .locker
-                    .add_write_lock(ptr, &mut self.locks, &mut [])
+                    .add_write_lock(ptr, &mut self.locks, &mut [], deep)
                     .await;
             }
             LockType::None => (),

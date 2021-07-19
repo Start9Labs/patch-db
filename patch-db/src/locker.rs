@@ -80,6 +80,7 @@ impl Locker {
     pub async fn lock_read<S: AsRef<str>, V: SegList>(
         &self,
         ptr: &JsonPointer<S, V>,
+        deep: bool,
     ) -> ReadGuard<HashMap<String, Locker>> {
         let mut lock = Some(self.0.clone().read().await.unwrap());
         for seg in ptr.iter() {
@@ -94,7 +95,9 @@ impl Locker {
             lock = Some(new_lock);
         }
         let res = lock.unwrap();
-        Self::lock_root_read(&res);
+        if deep {
+            Self::lock_root_read(&res);
+        }
         res
     }
     pub(crate) async fn add_read_lock<S: AsRef<str> + Clone, V: SegList + Clone>(
@@ -102,6 +105,7 @@ impl Locker {
         ptr: &JsonPointer<S, V>,
         locks: &mut Vec<(JsonPointer, LockerGuard)>,
         extra_locks: &mut [&mut [(JsonPointer, LockerGuard)]],
+        deep: bool,
     ) {
         for lock in extra_locks
             .iter()
@@ -114,7 +118,7 @@ impl Locker {
         }
         locks.push((
             JsonPointer::to_owned(ptr.clone()),
-            LockerGuard::Read(self.lock_read(ptr).await.into()),
+            LockerGuard::Read(self.lock_read(ptr, deep).await.into()),
         ));
     }
     fn lock_root_write<'a>(guard: &'a WriteGuard<HashMap<String, Locker>>) -> BoxFuture<'a, ()> {
@@ -129,6 +133,7 @@ impl Locker {
     pub async fn lock_write<S: AsRef<str>, V: SegList>(
         &self,
         ptr: &JsonPointer<S, V>,
+        deep: bool,
     ) -> WriteGuard<HashMap<String, Locker>> {
         let mut lock = self.0.clone().write().await.unwrap();
         for seg in ptr.iter() {
@@ -141,7 +146,9 @@ impl Locker {
             lock = new_lock;
         }
         let res = lock;
-        Self::lock_root_write(&res);
+        if deep {
+            Self::lock_root_write(&res);
+        }
         res
     }
     pub(crate) async fn add_write_lock<S: AsRef<str> + Clone, V: SegList + Clone>(
@@ -149,6 +156,7 @@ impl Locker {
         ptr: &JsonPointer<S, V>,
         locks: &mut Vec<(JsonPointer, LockerGuard)>, // tx locks
         extra_locks: &mut [&mut [(JsonPointer, LockerGuard)]], // tx parent locks
+        deep: bool,
     ) {
         let mut final_lock = None;
         for lock in extra_locks
@@ -222,7 +230,7 @@ impl Locker {
             if let Some(lock) = final_lock {
                 lock
             } else {
-                LockerGuard::Write(self.lock_write(ptr).await.into())
+                LockerGuard::Write(self.lock_write(ptr, deep).await.into())
             },
         ));
     }
