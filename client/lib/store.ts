@@ -1,6 +1,5 @@
 import { DBCache, Dump, Http, Revision, Update } from './types'
 import { BehaviorSubject, Observable } from 'rxjs'
-import { finalize } from 'rxjs/operators'
 import { applyOperation, getValueByPointer, Operation } from './json-patch-lib'
 import BTree from 'sorted-btree'
 
@@ -34,9 +33,6 @@ export class Store<T> {
     const path = `/${args.join('/')}`
     if (!this.watchedNodes[path]) {
       this.watchedNodes[path] = new BehaviorSubject(getValueByPointer(this.cache.data, path))
-      this.watchedNodes[path].pipe(
-        finalize(() => delete this.watchedNodes[path]),
-      )
     }
     return this.watchedNodes[path].asObservable()
   }
@@ -134,14 +130,19 @@ export class Store<T> {
   }
 
   private updateWatchedNodes (revisionPath: string) {
+    const kill = (path: string) => {
+      this.watchedNodes[path].complete()
+      delete this.watchedNodes[path]
+    }
+
     Object.keys(this.watchedNodes).forEach(path => {
+      if (this.watchedNodes[path].observers.length === 0) return kill(path)
+
       if (path.includes(revisionPath) || revisionPath.includes(path)) {
         const val = getValueByPointer(this.cache.data, path)
-        if (val !== undefined) {
-          this.watchedNodes[path].next(val)
-        } else {
-          this.watchedNodes[path].complete()
-        }
+        if (val === undefined) return kill(path)
+
+        this.watchedNodes[path].next(val)
       }
     })
   }
