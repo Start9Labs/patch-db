@@ -25,6 +25,7 @@ export type Doc = { [key: string]: any }
 export type Operation = AddOperation<any> | RemoveOperation | ReplaceOperation<any>
 
 export function getValueByPointer (document: any, pointer: string): any {
+  if (pointer === '/') return document
   const pathArr = pointer.split('/')
   pathArr.shift()
   try {
