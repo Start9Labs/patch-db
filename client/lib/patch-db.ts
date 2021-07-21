@@ -2,7 +2,7 @@ import { merge, Observable, of } from 'rxjs'
 import { concatMap, finalize, tap } from 'rxjs/operators'
 import { Source } from './source/source'
 import { Store } from './store'
-import { DBCache, Http } from './types'
+import { DBCache, HashMap, Http } from './types'
 
 export class PatchDB<T> {
   store: Store<T>
@@ -15,7 +15,7 @@ export class PatchDB<T> {
     this.store = new Store(this.http, this.initialCache)
   }
 
-  sync$ (): Observable<DBCache<T>> {
+  sync$ (): Observable<DBCache<HashMap>> {
     return merge(...this.sources.map(s => s.watch$(this.store)))
     .pipe(
       tap(update => this.store.update(update)),
