@@ -1,4 +1,4 @@
-import { DBCache, Dump, HashMap, Http, Revision, Update } from './types'
+import { DBCache, Dump, Http, Revision, Update } from './types'
 import { BehaviorSubject, Observable } from 'rxjs'
 import { applyOperation, getValueByPointer, Operation } from './json-patch-lib'
 import BTree from 'sorted-btree'
@@ -8,7 +8,7 @@ export interface StashEntry {
   undo: Operation[]
 }
 
-export class Store<T extends HashMap> {
+export class Store<T extends { [key: string]: any }> {
   cache: DBCache<T>
   sequence$: BehaviorSubject<number>
   private watchedNodes: { [path: string]: BehaviorSubject<any> } = { }
@@ -66,9 +66,13 @@ export class Store<T extends HashMap> {
   }
 
   private handleDump (dump: Dump<T>): void {
-    Object.keys(this.cache.data).forEach(key => delete this.cache.data[key])
-    Object.assign(this.cache.data, dump)
-    this.cache.data = dump.value
+    Object.keys(this.cache.data).forEach(key => {
+      if (dump.value[key] !== undefined) {
+        (this.cache.data as any)[key] = dump.value[key]
+      } else {
+        delete this.cache.data[key]
+      }
+    })
     this.stash.deleteRange(this.cache.sequence, dump.id, false)
     this.updateWatchedNodes('')
     this.updateSequence(dump.id)
