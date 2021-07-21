@@ -4,7 +4,7 @@ import { Source } from './source/source'
 import { Store } from './store'
 import { DBCache, HashMap, Http } from './types'
 
-export class PatchDB<T> {
+export class PatchDB<T extends HashMap> {
   store: Store<T>
 
   constructor (
@@ -15,7 +15,7 @@ export class PatchDB<T> {
     this.store = new Store(this.http, this.initialCache)
   }
 
-  sync$ (): Observable<DBCache<HashMap>> {
+  sync$ (): Observable<DBCache<T>> {
     return merge(...this.sources.map(s => s.watch$(this.store)))
     .pipe(
       tap(update => this.store.update(update)),
