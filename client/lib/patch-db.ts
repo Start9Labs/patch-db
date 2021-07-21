@@ -2,9 +2,9 @@ import { merge, Observable, of } from 'rxjs'
 import { concatMap, finalize, tap } from 'rxjs/operators'
 import { Source } from './source/source'
 import { Store } from './store'
-import { DBCache, HashMap, Http } from './types'
+import { DBCache, Http } from './types'
 
-export class PatchDB<T extends HashMap> {
+export class PatchDB<T> {
   store: Store<T>
 
   constructor (
