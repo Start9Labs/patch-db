@@ -1,7 +1,7 @@
 import { Observable } from 'rxjs'
 import { Store } from '../store'
-import { Update } from '../types'
+import { HashMap, Update } from '../types'
 
-export interface Source<T> {
+export interface Source<T extends HashMap> {
   watch$ (store?: Store<T>): Observable<Update<T>>
 }
