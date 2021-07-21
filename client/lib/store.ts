@@ -1,4 +1,4 @@
-import { DBCache, Dump, Http, Revision, Update } from './types'
+import { DBCache, Dump, HashMap, Http, Revision, Update } from './types'
 import { BehaviorSubject, Observable } from 'rxjs'
 import { applyOperation, getValueByPointer, Operation } from './json-patch-lib'
 import BTree from 'sorted-btree'
@@ -9,7 +9,7 @@ export interface StashEntry {
 }
 
 export class Store<T> {
-  cache: DBCache<T>
+  cache: DBCache<HashMap>
   sequence$: BehaviorSubject<number>
   private watchedNodes: { [path: string]: BehaviorSubject<any> } = { }
   private stash = new BTree<number, StashEntry>()
@@ -66,6 +66,8 @@ export class Store<T> {
   }
 
   private handleDump (dump: Dump<T>): void {
+    Object.keys(this.cache.data).forEach(key => delete this.cache.data[key])
+    Object.assign(this.cache.data, dump)
     this.cache.data = dump.value
     this.stash.deleteRange(this.cache.sequence, dump.id, false)
     this.updateWatchedNodes('')
