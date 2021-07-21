@@ -8,8 +8,8 @@ export interface StashEntry {
   undo: Operation[]
 }
 
-export class Store<T> {
-  cache: DBCache<HashMap>
+export class Store<T extends HashMap> {
+  cache: DBCache<T>
   sequence$: BehaviorSubject<number>
   private watchedNodes: { [path: string]: BehaviorSubject<any> } = { }
   private stash = new BTree<number, StashEntry>()
