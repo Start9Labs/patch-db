@@ -67,12 +67,15 @@ export class Store<T extends { [key: string]: any }> {
 
   private handleDump (dump: Dump<T>): void {
     Object.keys(this.cache.data).forEach(key => {
-      if (dump.value[key] !== undefined) {
-        (this.cache.data as any)[key] = dump.value[key]
-      } else {
+      if (dump.value[key] === undefined) {
         delete this.cache.data[key]
       }
     })
+
+    Object.entries(dump.value).forEach(([key, val]) => {
+      (this.cache.data as any)[key] = val
+    })
+
     this.stash.deleteRange(this.cache.sequence, dump.id, false)
     this.updateWatchedNodes('')
     this.updateSequence(dump.id)
