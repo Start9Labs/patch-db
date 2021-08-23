@@ -50,6 +50,7 @@ export class Store<T extends { [key: string]: any }> {
 
   reset (): void {
     Object.values(this.watchedNodes).forEach(node => node.complete())
+    this.watchedNodes = { }
     this.stash.clear()
   }
 
