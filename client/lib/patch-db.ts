@@ -20,9 +20,6 @@ export class PatchDB<T> {
     .pipe(
       tap(update => this.store.update(update)),
       concatMap(() => of(this.store.cache)),
-      finalize(() => {
-        this.store.reset()
-      }),
     )
   }
 }
