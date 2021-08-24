@@ -22,7 +22,7 @@ pub struct Dump {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct DiffPatch(Patch);
+pub struct DiffPatch(pub(crate) Patch);
 impl DiffPatch {
     pub fn prepend<S: AsRef<str>, V: SegList>(&mut self, ptr: &JsonPointer<S, V>) {
         self.0.prepend(ptr)
