@@ -1,5 +1,5 @@
 export interface Validator<T> {
-  (operation: Operation, index: number, document: T, existingPathFragment: string): void
+  (operation: Operation, index: number, doc: T, existingPathFragment: string): void
 }
 
 export interface BaseOperation {
@@ -24,18 +24,18 @@ export type Doc = { [key: string]: any }
 
 export type Operation = AddOperation<any> | RemoveOperation | ReplaceOperation<any>
 
-export function getValueByPointer (document: any, pointer: string): any {
-  if (pointer === '/') return document
+export function getValueByPointer (doc: any, pointer: string): any {
+  if (pointer === '/') return doc
   const pathArr = pointer.split('/')
   pathArr.shift()
   try {
-    return pathArr.reduce((acc, next) => acc[next], document)
+    return pathArr.reduce((acc, next) => acc[next], doc)
   } catch (e) {
     return undefined
   }
 }
 
-export function applyOperation (document: Doc, op: Operation): Operation | null {
+export function applyOperation (doc: Doc, op: Operation): Operation | null {
   let undo: Operation | null = null
   const pathArr = op.path.split('/')
   pathArr.shift()
@@ -75,7 +75,7 @@ export function applyOperation (document: Doc, op: Operation): Operation | null 
         }
       }
     }
-  }, document)
+  }, doc)
 
   return undo
 }

@@ -93,7 +93,7 @@ export class Store<T extends { [key: string]: any }> {
 
     while (stashEntry && stashEntry.revision.id > id) {
       stashEntry.undo.forEach(u => {
-        applyOperation(document, u)
+        applyOperation(this.cache.data, u)
       })
       stashEntry = this.stash.nextLowerPair(stashEntry.revision.id)?.[1]
     }
@@ -114,7 +114,7 @@ export class Store<T extends { [key: string]: any }> {
         success = true
       } catch (e) {
         undo.forEach(u => {
-          applyOperation(document, u)
+          applyOperation(this.cache.data, u)
         })
         undo = []
       }
