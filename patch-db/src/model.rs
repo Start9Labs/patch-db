@@ -4,12 +4,13 @@ use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 
 use indexmap::{IndexMap, IndexSet};
+use json_patch::{Patch, PatchOperation, RemoveOperation};
 use json_ptr::JsonPointer;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::Error;
 use crate::{locker::LockType, DbHandle};
+use crate::{DiffPatch, Error};
 
 #[derive(Debug)]
 pub struct ModelData<T: Serialize + for<'de> Deserialize<'de>>(T);
@@ -458,6 +459,16 @@ where
             .into_iter()
             .map(|s| serde_json::from_value(Value::String(s)))
             .collect::<Result<_, _>>()?)
+    }
+    pub async fn remove<Db: DbHandle>(&self, db: &mut Db, key: &T::Key) -> Result<(), Error> {
+        db.lock(self.as_ref(), LockType::Write, false).await;
+        db.apply(DiffPatch(Patch(vec![PatchOperation::Remove(
+            RemoveOperation {
+                path: self.as_ref().clone().join_end(key.as_ref()),
+            },
+        )])))
+        .await?;
+        Ok(())
     }
 }
 impl<T> MapModel<T>
