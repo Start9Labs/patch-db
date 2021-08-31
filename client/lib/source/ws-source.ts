@@ -1,10 +1,11 @@
-import { Observable } from 'rxjs'
+import { Observable, Subject } from 'rxjs'
 import { webSocket, WebSocketSubject, WebSocketSubjectConfig } from 'rxjs/webSocket'
 import { Update } from '../types'
 import { Source } from './source'
 
 export class WebsocketSource<T> implements Source<T> {
   private websocket$: WebSocketSubject<Update<T>> | undefined
+  connectionMade$ = new Subject<void>()
 
   constructor (
     private readonly url: string,
@@ -15,6 +16,7 @@ export class WebsocketSource<T> implements Source<T> {
       url: this.url,
       openObserver: {
         next: () => {
+          this.connectionMade$.next()
           this.websocket$!.next(document.cookie as any)
         },
       },
