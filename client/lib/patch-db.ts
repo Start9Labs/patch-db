@@ -1,5 +1,5 @@
 import { merge, Observable, of } from 'rxjs'
-import { concatMap, finalize, tap } from 'rxjs/operators'
+import { concatMap, tap } from 'rxjs/operators'
 import { Source } from './source/source'
 import { Store } from './store'
 import { DBCache, Http } from './types'
@@ -21,5 +21,9 @@ export class PatchDB<T> {
       tap(update => this.store.update(update)),
       concatMap(() => of(this.store.cache)),
     )
+  }
+
+  connectionMade$ (): Observable<void> {
+    return merge(...this.sources.map(s => s.connectionMade$))
   }
 }
