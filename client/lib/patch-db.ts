@@ -22,8 +22,4 @@ export class PatchDB<T> {
       concatMap(() => of(this.store.cache)),
     )
   }
-
-  connectionMade$ (): Observable<void> {
-    return merge(...this.sources.map(s => s.connectionMade$))
-  }
 }

@@ -9,7 +9,6 @@ export type PollConfig = {
 }
 
 export class PollSource<T> implements Source<T> {
-  connectionMade$ = new Subject<void>()
 
   constructor (
     private readonly pollConfig: PollConfig,
@@ -37,7 +36,6 @@ export class PollSource<T> implements Source<T> {
     return polling$.pipe(
       switchMap(_ => poll$),
       concatMap(res => {
-        this.connectionMade$.next()
         if (Array.isArray(res)) {
           return from(res) // takes Revision[] and converts it into Observable<Revision>
         } else {
