@@ -27,16 +27,23 @@ pub struct Transaction<Parent: DbHandle> {
     pub(crate) sub: Receiver<Arc<Revision>>,
 }
 impl Transaction<&mut PatchDbHandle> {
-    pub async fn commit(mut self, expire_id: Option<String>) -> Result<Arc<Revision>, Error> {
-        let store_lock = self.parent.store();
-        let store = store_lock.write().await;
-        self.rebase()?;
-        let rev = self
-            .parent
-            .db
-            .apply(self.updates, expire_id, Some(store))
-            .await?;
-        Ok(rev)
+    pub async fn commit(
+        mut self,
+        expire_id: Option<String>,
+    ) -> Result<Option<Arc<Revision>>, Error> {
+        if (self.updates.0).0.is_empty() && expire_id.is_none() {
+            Ok(None)
+        } else {
+            let store_lock = self.parent.store();
+            let store = store_lock.write().await;
+            self.rebase()?;
+            let rev = self
+                .parent
+                .db
+                .apply(self.updates, expire_id, Some(store))
+                .await?;
+            Ok(Some(rev))
+        }
     }
     pub async fn abort(mut self) -> Result<DiffPatch, Error> {
         let store_lock = self.parent.store();
