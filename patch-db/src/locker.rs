@@ -82,6 +82,8 @@ impl Locker {
         ptr: &JsonPointer<S, V>,
         deep: bool,
     ) -> ReadGuard<HashMap<String, Locker>> {
+        #[cfg(feature = "log")]
+        log::debug!("Locking {} for READ: {{ deep: {} }}", ptr, deep);
         let mut lock = Some(self.0.clone().read().await.unwrap());
         for seg in ptr.iter() {
             let new_lock = if let Some(locker) = lock.as_ref().unwrap().get(seg) {
@@ -98,6 +100,8 @@ impl Locker {
         if deep {
             Self::lock_root_read(&res);
         }
+        #[cfg(feature = "log")]
+        log::debug!("Locked {} for READ: {{ deep: {} }}", ptr, deep);
         res
     }
     pub(crate) async fn add_read_lock<S: AsRef<str> + Clone, V: SegList + Clone>(
@@ -135,6 +139,8 @@ impl Locker {
         ptr: &JsonPointer<S, V>,
         deep: bool,
     ) -> WriteGuard<HashMap<String, Locker>> {
+        #[cfg(feature = "log")]
+        log::debug!("Locking {} for WRITE: {{ deep: {} }}", ptr, deep);
         let mut lock = self.0.clone().write().await.unwrap();
         for seg in ptr.iter() {
             let new_lock = if let Some(locker) = lock.get(seg) {
@@ -149,6 +155,8 @@ impl Locker {
         if deep {
             Self::lock_root_write(&res);
         }
+        #[cfg(feature = "log")]
+        log::debug!("Locked {} for WRITE: {{ deep: {} }}", ptr, deep);
         res
     }
     pub(crate) async fn add_write_lock<S: AsRef<str> + Clone, V: SegList + Clone>(
