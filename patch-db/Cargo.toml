@@ -20,6 +20,7 @@ indexmap = { version = "1.6.2", features = ["serde"] }
 json-patch = { path = "../json-patch" }
 json-ptr = { path = "../json-ptr" }
 lazy_static = "1.4.0"
+log = { version = "*", optional = true }
 nix = "0.20.0"
 patch-db-macro = { path = "../patch-db-macro" }
 qutex = { path = "../qutex", package = "qutex-2" }
@@ -27,9 +28,22 @@ serde = { version = "1.0.118", features = ["rc"] }
 serde_cbor = { path = "../cbor" }
 serde_json = "1.0.61"
 thiserror = "1.0.23"
-tokio = { version = "1.0.1", features = ["sync", "fs", "rt", "io-util", "macros"] }
+tokio = { version = "1.0.1", features = [
+    "sync",
+    "fs",
+    "rt",
+    "io-util",
+    "macros",
+] }
 
 [dev-dependencies]
 proptest = "1.0.0"
 serde = { version = "1.0.118", features = ["rc", "derive"] }
-tokio = { version = "1.0.1", features = ["sync", "fs", "rt", "rt-multi-thread", "io-util", "macros"] }
+tokio = { version = "1.0.1", features = [
+    "sync",
+    "fs",
+    "rt",
+    "rt-multi-thread",
+    "io-util",
+    "macros",
+] }
