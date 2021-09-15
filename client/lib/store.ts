@@ -38,10 +38,9 @@ export class Store<T extends { [key: string]: any }> {
   }
 
   update (update: Update<T>): void {
-    // if old or known, return
-    if (update.id <= this.cache.sequence || this.stash.get(update.id)) return
-
     if (this.isRevision(update)) {
+       // if old or known, return
+      if (update.id <= this.cache.sequence || this.stash.get(update.id)) return
       this.handleRevision(update)
     } else {
       this.handleDump(update)
@@ -52,6 +51,7 @@ export class Store<T extends { [key: string]: any }> {
     Object.values(this.watchedNodes).forEach(node => node.complete())
     this.watchedNodes = { }
     this.stash.clear()
+    this.sequence$.next(0)
   }
 
   private handleRevision (revision: Revision): void {
@@ -76,7 +76,6 @@ export class Store<T extends { [key: string]: any }> {
     Object.entries(dump.value).forEach(([key, val]) => {
       (this.cache.data as any)[key] = val
     })
-
     this.stash.deleteRange(this.cache.sequence, dump.id, false)
     this.updateWatchedNodes('')
     this.updateSequence(dump.id)
@@ -101,7 +100,6 @@ export class Store<T extends { [key: string]: any }> {
 
   private applyRevisions (id: number): void {
     let revision = this.stash.get(id)?.revision
-
     while (revision) {
       let undo: Operation[] = []
 
