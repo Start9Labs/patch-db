@@ -244,10 +244,11 @@ impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> OptionModel<T> {
         F: FnOnce(T::Model) -> V,
         U: Serialize + for<'de> Deserialize<'de>,
         V: ModelFor<U>,
+        W: ModelFor<Option<U>>,
     >(
         self,
         f: F,
-    ) -> Model<Option<U>> {
+    ) -> W {
         Into::<JsonPointer>::into(f(self.0)).into()
     }
 
