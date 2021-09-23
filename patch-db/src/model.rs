@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
+use std::sync::Arc;
 
 use indexmap::{IndexMap, IndexSet};
 use json_patch::{Patch, PatchOperation, RemoveOperation};
@@ -9,8 +10,8 @@ use json_ptr::JsonPointer;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{locker::LockType, DbHandle};
-use crate::{DiffPatch, Error};
+use crate::locker::LockType;
+use crate::{DbHandle, DiffPatch, Error, Revision};
 
 #[derive(Debug)]
 pub struct ModelData<T: Serialize + for<'de> Deserialize<'de>>(T);
@@ -99,7 +100,11 @@ impl<T> Model<T>
 where
     T: Serialize + for<'de> Deserialize<'de> + Send + Sync,
 {
-    pub async fn put<Db: DbHandle>(&self, db: &mut Db, value: &T) -> Result<(), Error> {
+    pub async fn put<Db: DbHandle>(
+        &self,
+        db: &mut Db,
+        value: &T,
+    ) -> Result<Option<Arc<Revision>>, Error> {
         self.lock(db, LockType::Write).await;
         db.put(&self.ptr, value).await
     }
@@ -278,7 +283,7 @@ impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> OptionModel<T> {
         }
     }
 
-    pub async fn delete<Db: DbHandle>(&self, db: &mut Db) -> Result<(), Error> {
+    pub async fn delete<Db: DbHandle>(&self, db: &mut Db) -> Result<Option<Arc<Revision>>, Error> {
         db.lock(self.as_ref(), LockType::Write, true).await;
         db.put(self.as_ref(), &Value::Null).await
     }
@@ -287,7 +292,11 @@ impl<T> OptionModel<T>
 where
     T: Serialize + for<'de> Deserialize<'de> + Send + Sync + HasModel,
 {
-    pub async fn put<Db: DbHandle>(&self, db: &mut Db, value: &T) -> Result<(), Error> {
+    pub async fn put<Db: DbHandle>(
+        &self,
+        db: &mut Db,
+        value: &T,
+    ) -> Result<Option<Arc<Revision>>, Error> {
         db.lock(self.as_ref(), LockType::Write, true).await;
         db.put(self.as_ref(), value).await
     }
