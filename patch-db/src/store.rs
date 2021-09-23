@@ -209,7 +209,7 @@ impl Store {
 pub struct PatchDb {
     pub(crate) store: Arc<RwLock<Store>>,
     subscriber: Arc<Sender<Arc<Revision>>>,
-    pub(crate) locker: Locker,
+    pub(crate) locker: Arc<Locker>,
 }
 impl PatchDb {
     pub async fn open<P: AsRef<Path>>(path: P) -> Result<Self, Error> {
@@ -217,7 +217,7 @@ impl PatchDb {
 
         Ok(PatchDb {
             store: Arc::new(RwLock::new(Store::open(path).await?)),
-            locker: Locker::new(),
+            locker: Arc::new(Locker::new()),
             subscriber: Arc::new(subscriber),
         })
     }
