@@ -42,7 +42,7 @@ impl Transaction<&mut PatchDbHandle> {
                 .db
                 .apply(self.updates, expire_id, Some(store))
                 .await?;
-            Ok(Some(rev))
+            Ok(rev)
         }
     }
     pub async fn abort(mut self) -> Result<DiffPatch, Error> {
@@ -155,12 +155,12 @@ impl<Parent: DbHandle + Send + Sync> DbHandle for Transaction<Parent> {
         &mut self,
         ptr: &JsonPointer<S, V>,
         value: &Value,
-    ) -> Result<(), Error> {
+    ) -> Result<Option<Arc<Revision>>, Error> {
         let old = self.get_value(ptr, None).await?;
         let mut patch = crate::patch::diff(&old, &value);
         patch.prepend(ptr);
         self.updates.append(patch);
-        Ok(())
+        Ok(None)
     }
     async fn lock<S: AsRef<str> + Clone + Send + Sync, V: SegList + Clone + Send + Sync>(
         &mut self,
@@ -202,11 +202,11 @@ impl<Parent: DbHandle + Send + Sync> DbHandle for Transaction<Parent> {
         &mut self,
         ptr: &JsonPointer<S, V>,
         value: &T,
-    ) -> Result<(), Error> {
+    ) -> Result<Option<Arc<Revision>>, Error> {
         self.put_value(ptr, &serde_json::to_value(value)?).await
     }
-    async fn apply(&mut self, patch: DiffPatch) -> Result<(), Error> {
+    async fn apply(&mut self, patch: DiffPatch) -> Result<Option<Arc<Revision>>, Error> {
         self.updates.append(patch);
-        Ok(())
+        Ok(None)
     }
 }

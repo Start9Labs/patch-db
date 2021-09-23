@@ -38,6 +38,7 @@ async fn put_string_into_root(db: PatchDb, s: String) -> Arc<Revision> {
     db.put(&JsonPointer::<&'static str>::default(), &s, None)
         .await
         .unwrap()
+        .unwrap()
 }
 
 #[tokio::test]
