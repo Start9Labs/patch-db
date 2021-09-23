@@ -7,10 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::{broadcast::Receiver, RwLock, RwLockReadGuard};
 
-use crate::{
-    locker::{LockType, LockerGuard},
-    Locker, PatchDb, Revision, Store, Transaction,
-};
+use crate::{locker::LockerGuard, Locker, PatchDb, Revision, Store, Transaction};
 use crate::{patch::DiffPatch, Error};
 
 #[async_trait]
@@ -19,7 +16,7 @@ pub trait DbHandle: Send + Sync {
     fn rebase(&mut self) -> Result<(), Error>;
     fn store(&self) -> Arc<RwLock<Store>>;
     fn subscribe(&self) -> Receiver<Arc<Revision>>;
-    fn locker_and_locks(&mut self) -> (&Locker, Vec<&mut [(JsonPointer, LockerGuard)]>);
+    fn locker_and_locks(&mut self) -> (&Locker, Vec<&mut [(JsonPointer, Option<LockerGuard>)]>);
     async fn exists<S: AsRef<str> + Send + Sync, V: SegList + Send + Sync>(
         &mut self,
         ptr: &JsonPointer<S, V>,
@@ -41,12 +38,7 @@ pub trait DbHandle: Send + Sync {
         value: &Value,
     ) -> Result<Option<Arc<Revision>>, Error>;
     async fn apply(&mut self, patch: DiffPatch) -> Result<Option<Arc<Revision>>, Error>;
-    async fn lock<S: AsRef<str> + Clone + Send + Sync, V: SegList + Clone + Send + Sync>(
-        &mut self,
-        ptr: &JsonPointer<S, V>,
-        lock: LockType,
-        deep: bool,
-    ) -> ();
+    async fn lock(&mut self, ptr: &JsonPointer) -> ();
     async fn get<
         T: for<'de> Deserialize<'de>,
         S: AsRef<str> + Send + Sync,
@@ -90,7 +82,7 @@ impl<Handle: DbHandle + ?Sized> DbHandle for &mut Handle {
     fn subscribe(&self) -> Receiver<Arc<Revision>> {
         (**self).subscribe()
     }
-    fn locker_and_locks(&mut self) -> (&Locker, Vec<&mut [(JsonPointer, LockerGuard)]>) {
+    fn locker_and_locks(&mut self) -> (&Locker, Vec<&mut [(JsonPointer, Option<LockerGuard>)]>) {
         (*self).locker_and_locks()
     }
     async fn exists<S: AsRef<str> + Send + Sync, V: SegList + Send + Sync>(
@@ -124,13 +116,8 @@ impl<Handle: DbHandle + ?Sized> DbHandle for &mut Handle {
     async fn apply(&mut self, patch: DiffPatch) -> Result<Option<Arc<Revision>>, Error> {
         (*self).apply(patch).await
     }
-    async fn lock<S: AsRef<str> + Clone + Send + Sync, V: SegList + Clone + Send + Sync>(
-        &mut self,
-        ptr: &JsonPointer<S, V>,
-        lock: LockType,
-        deep: bool,
-    ) {
-        (*self).lock(ptr, lock, deep).await
+    async fn lock(&mut self, ptr: &JsonPointer) {
+        (*self).lock(ptr).await
     }
     async fn get<
         T: for<'de> Deserialize<'de>,
@@ -157,7 +144,7 @@ impl<Handle: DbHandle + ?Sized> DbHandle for &mut Handle {
 
 pub struct PatchDbHandle {
     pub(crate) db: PatchDb,
-    pub(crate) locks: Vec<(JsonPointer, LockerGuard)>,
+    pub(crate) locks: Vec<(JsonPointer, Option<LockerGuard>)>,
 }
 
 #[async_trait]
@@ -179,7 +166,7 @@ impl DbHandle for PatchDbHandle {
     fn subscribe(&self) -> Receiver<Arc<Revision>> {
         self.db.subscribe()
     }
-    fn locker_and_locks(&mut self) -> (&Locker, Vec<&mut [(JsonPointer, LockerGuard)]>) {
+    fn locker_and_locks(&mut self) -> (&Locker, Vec<&mut [(JsonPointer, Option<LockerGuard>)]>) {
         (&self.db.locker, vec![self.locks.as_mut_slice()])
     }
     async fn exists<S: AsRef<str> + Send + Sync, V: SegList + Send + Sync>(
@@ -225,27 +212,8 @@ impl DbHandle for PatchDbHandle {
     async fn apply(&mut self, patch: DiffPatch) -> Result<Option<Arc<Revision>>, Error> {
         self.db.apply(patch, None, None).await
     }
-    async fn lock<S: AsRef<str> + Clone + Send + Sync, V: SegList + Clone + Send + Sync>(
-        &mut self,
-        ptr: &JsonPointer<S, V>,
-        lock: LockType,
-        deep: bool,
-    ) {
-        match lock {
-            LockType::Read => {
-                self.db
-                    .locker
-                    .add_read_lock(ptr, &mut self.locks, &mut [], deep)
-                    .await;
-            }
-            LockType::Write => {
-                self.db
-                    .locker
-                    .add_write_lock(ptr, &mut self.locks, &mut [], deep)
-                    .await;
-            }
-            LockType::None => (),
-        }
+    async fn lock(&mut self, ptr: &JsonPointer) {
+        self.db.locker.add_lock(ptr, &mut self.locks, &mut []).await;
     }
     async fn get<
         T: for<'de> Deserialize<'de>,
