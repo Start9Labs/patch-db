@@ -7,16 +7,17 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::{broadcast::Receiver, RwLock, RwLockReadGuard};
 
-use crate::{locker::LockerGuard, Locker, PatchDb, Revision, Store, Transaction};
+use crate::{locker::Guard, Locker, PatchDb, Revision, Store, Transaction};
 use crate::{patch::DiffPatch, Error};
 
 #[async_trait]
 pub trait DbHandle: Send + Sync {
     async fn begin<'a>(&'a mut self) -> Result<Transaction<&'a mut Self>, Error>;
+    fn id(&self) -> usize;
     fn rebase(&mut self) -> Result<(), Error>;
     fn store(&self) -> Arc<RwLock<Store>>;
     fn subscribe(&self) -> Receiver<Arc<Revision>>;
-    fn locker_and_locks(&mut self) -> (&Locker, Vec<&mut [(JsonPointer, Option<LockerGuard>)]>);
+    fn locker(&self) -> &Locker;
     async fn exists<S: AsRef<str> + Send + Sync, V: SegList + Send + Sync>(
         &mut self,
         ptr: &JsonPointer<S, V>,
@@ -38,7 +39,7 @@ pub trait DbHandle: Send + Sync {
         value: &Value,
     ) -> Result<Option<Arc<Revision>>, Error>;
     async fn apply(&mut self, patch: DiffPatch) -> Result<Option<Arc<Revision>>, Error>;
-    async fn lock(&mut self, ptr: &JsonPointer) -> ();
+    async fn lock(&mut self, ptr: JsonPointer, write: bool) -> ();
     async fn get<
         T: for<'de> Deserialize<'de>,
         S: AsRef<str> + Send + Sync,
@@ -67,14 +68,18 @@ impl<Handle: DbHandle + ?Sized> DbHandle for &mut Handle {
             ..
         } = (*self).begin().await?;
         Ok(Transaction {
+            id: self.id(),
             parent: self,
             locks,
             updates,
             sub,
         })
     }
+    fn id(&self) -> usize {
+        (**self).id()
+    }
     fn rebase(&mut self) -> Result<(), Error> {
-        (*self).rebase()
+        (**self).rebase()
     }
     fn store(&self) -> Arc<RwLock<Store>> {
         (**self).store()
@@ -82,8 +87,8 @@ impl<Handle: DbHandle + ?Sized> DbHandle for &mut Handle {
     fn subscribe(&self) -> Receiver<Arc<Revision>> {
         (**self).subscribe()
     }
-    fn locker_and_locks(&mut self) -> (&Locker, Vec<&mut [(JsonPointer, Option<LockerGuard>)]>) {
-        (*self).locker_and_locks()
+    fn locker(&self) -> &Locker {
+        (**self).locker()
     }
     async fn exists<S: AsRef<str> + Send + Sync, V: SegList + Send + Sync>(
         &mut self,
@@ -116,8 +121,8 @@ impl<Handle: DbHandle + ?Sized> DbHandle for &mut Handle {
     async fn apply(&mut self, patch: DiffPatch) -> Result<Option<Arc<Revision>>, Error> {
         (*self).apply(patch).await
     }
-    async fn lock(&mut self, ptr: &JsonPointer) {
-        (*self).lock(ptr).await
+    async fn lock(&mut self, ptr: JsonPointer, write: bool) {
+        (*self).lock(ptr, write).await
     }
     async fn get<
         T: for<'de> Deserialize<'de>,
@@ -143,8 +148,9 @@ impl<Handle: DbHandle + ?Sized> DbHandle for &mut Handle {
 }
 
 pub struct PatchDbHandle {
+    pub(crate) id: usize,
     pub(crate) db: PatchDb,
-    pub(crate) locks: Vec<(JsonPointer, Option<LockerGuard>)>,
+    pub(crate) locks: Vec<Guard>,
 }
 
 #[async_trait]
@@ -152,10 +158,14 @@ impl DbHandle for PatchDbHandle {
     async fn begin<'a>(&'a mut self) -> Result<Transaction<&'a mut Self>, Error> {
         Ok(Transaction {
             sub: self.subscribe(),
+            id: self.id(),
             parent: self,
             locks: Vec::new(),
             updates: DiffPatch::default(),
         })
+    }
+    fn id(&self) -> usize {
+        self.id
     }
     fn rebase(&mut self) -> Result<(), Error> {
         Ok(())
@@ -166,8 +176,8 @@ impl DbHandle for PatchDbHandle {
     fn subscribe(&self) -> Receiver<Arc<Revision>> {
         self.db.subscribe()
     }
-    fn locker_and_locks(&mut self) -> (&Locker, Vec<&mut [(JsonPointer, Option<LockerGuard>)]>) {
-        (&self.db.locker, vec![self.locks.as_mut_slice()])
+    fn locker(&self) -> &Locker {
+        &self.db.locker
     }
     async fn exists<S: AsRef<str> + Send + Sync, V: SegList + Send + Sync>(
         &mut self,
@@ -212,8 +222,9 @@ impl DbHandle for PatchDbHandle {
     async fn apply(&mut self, patch: DiffPatch) -> Result<Option<Arc<Revision>>, Error> {
         self.db.apply(patch, None, None).await
     }
-    async fn lock(&mut self, ptr: &JsonPointer) {
-        self.db.locker.add_lock(ptr, &mut self.locks, &mut []).await;
+    async fn lock(&mut self, ptr: JsonPointer, write: bool) {
+        self.locks
+            .push(self.db.locker.lock(self.id, ptr, write).await);
     }
     async fn get<
         T: for<'de> Deserialize<'de>,
