@@ -157,7 +157,7 @@ impl Store {
         ptr: &JsonPointer<S, V>,
         value: &T,
         expire_id: Option<String>,
-    ) -> Result<Arc<Revision>, Error> {
+    ) -> Result<Option<Arc<Revision>>, Error> {
         let mut patch = diff(
             ptr.get(self.get_data()?).unwrap_or(&Value::Null),
             &serde_json::to_value(value)?,
@@ -169,8 +169,12 @@ impl Store {
         &mut self,
         patch: DiffPatch,
         expire_id: Option<String>,
-    ) -> Result<Arc<Revision>, Error> {
+    ) -> Result<Option<Arc<Revision>>, Error> {
         use tokio::io::AsyncWriteExt;
+
+        if (patch.0).0.is_empty() && expire_id.is_none() {
+            return Ok(None);
+        }
 
         self.check_cache_corrupted()?;
         let patch_bin = serde_cbor::to_vec(&*patch)?;
@@ -197,7 +201,7 @@ impl Store {
             expire_id,
         });
 
-        Ok(res)
+        Ok(Some(res))
     }
 }
 
@@ -248,10 +252,12 @@ impl PatchDb {
         ptr: &JsonPointer<S, V>,
         value: &T,
         expire_id: Option<String>,
-    ) -> Result<Arc<Revision>, Error> {
+    ) -> Result<Option<Arc<Revision>>, Error> {
         let mut store = self.store.write().await;
         let rev = store.put(ptr, value, expire_id).await?;
-        self.subscriber.send(rev.clone()).unwrap_or_default();
+        if let Some(rev) = rev.as_ref() {
+            self.subscriber.send(rev.clone()).unwrap_or_default();
+        }
         Ok(rev)
     }
     pub async fn apply(
@@ -259,14 +265,16 @@ impl PatchDb {
         patch: DiffPatch,
         expire_id: Option<String>,
         store_write_lock: Option<RwLockWriteGuard<'_, Store>>,
-    ) -> Result<Arc<Revision>, Error> {
+    ) -> Result<Option<Arc<Revision>>, Error> {
         let mut store = if let Some(store_write_lock) = store_write_lock {
             store_write_lock
         } else {
             self.store.write().await
         };
         let rev = store.apply(patch, expire_id).await?;
-        self.subscriber.send(rev.clone()).unwrap_or_default(); // ignore errors
+        if let Some(rev) = rev.as_ref() {
+            self.subscriber.send(rev.clone()).unwrap_or_default(); // ignore errors
+        }
         Ok(rev)
     }
     pub fn subscribe(&self) -> Receiver<Arc<Revision>> {

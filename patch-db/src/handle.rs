@@ -39,8 +39,8 @@ pub trait DbHandle: Send + Sync {
         &mut self,
         ptr: &JsonPointer<S, V>,
         value: &Value,
-    ) -> Result<(), Error>;
-    async fn apply(&mut self, patch: DiffPatch) -> Result<(), Error>;
+    ) -> Result<Option<Arc<Revision>>, Error>;
+    async fn apply(&mut self, patch: DiffPatch) -> Result<Option<Arc<Revision>>, Error>;
     async fn lock<S: AsRef<str> + Clone + Send + Sync, V: SegList + Clone + Send + Sync>(
         &mut self,
         ptr: &JsonPointer<S, V>,
@@ -63,7 +63,7 @@ pub trait DbHandle: Send + Sync {
         &mut self,
         ptr: &JsonPointer<S, V>,
         value: &T,
-    ) -> Result<(), Error>;
+    ) -> Result<Option<Arc<Revision>>, Error>;
 }
 #[async_trait]
 impl<Handle: DbHandle + ?Sized> DbHandle for &mut Handle {
@@ -118,10 +118,10 @@ impl<Handle: DbHandle + ?Sized> DbHandle for &mut Handle {
         &mut self,
         ptr: &JsonPointer<S, V>,
         value: &Value,
-    ) -> Result<(), Error> {
+    ) -> Result<Option<Arc<Revision>>, Error> {
         (*self).put_value(ptr, value).await
     }
-    async fn apply(&mut self, patch: DiffPatch) -> Result<(), Error> {
+    async fn apply(&mut self, patch: DiffPatch) -> Result<Option<Arc<Revision>>, Error> {
         (*self).apply(patch).await
     }
     async fn lock<S: AsRef<str> + Clone + Send + Sync, V: SegList + Clone + Send + Sync>(
@@ -150,7 +150,7 @@ impl<Handle: DbHandle + ?Sized> DbHandle for &mut Handle {
         &mut self,
         ptr: &JsonPointer<S, V>,
         value: &T,
-    ) -> Result<(), Error> {
+    ) -> Result<Option<Arc<Revision>>, Error> {
         (*self).put(ptr, value).await
     }
 }
@@ -219,13 +219,11 @@ impl DbHandle for PatchDbHandle {
         &mut self,
         ptr: &JsonPointer<S, V>,
         value: &Value,
-    ) -> Result<(), Error> {
-        self.db.put(ptr, value, None).await?;
-        Ok(())
+    ) -> Result<Option<Arc<Revision>>, Error> {
+        self.db.put(ptr, value, None).await
     }
-    async fn apply(&mut self, patch: DiffPatch) -> Result<(), Error> {
-        self.db.apply(patch, None, None).await?;
-        Ok(())
+    async fn apply(&mut self, patch: DiffPatch) -> Result<Option<Arc<Revision>>, Error> {
+        self.db.apply(patch, None, None).await
     }
     async fn lock<S: AsRef<str> + Clone + Send + Sync, V: SegList + Clone + Send + Sync>(
         &mut self,
@@ -267,8 +265,7 @@ impl DbHandle for PatchDbHandle {
         &mut self,
         ptr: &JsonPointer<S, V>,
         value: &T,
-    ) -> Result<(), Error> {
-        self.db.put(ptr, value, None).await?;
-        Ok(())
+    ) -> Result<Option<Arc<Revision>>, Error> {
+        self.db.put(ptr, value, None).await
     }
 }
