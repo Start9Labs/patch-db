@@ -12,7 +12,7 @@ use tokio::sync::{RwLock, RwLockReadGuard};
 use crate::store::Store;
 use crate::Error;
 use crate::{
-    locker::{LockType, Locker, LockerGuard},
+    locker::{Locker, LockerGuard},
     DbHandle,
 };
 use crate::{
@@ -22,7 +22,7 @@ use crate::{
 
 pub struct Transaction<Parent: DbHandle> {
     pub(crate) parent: Parent,
-    pub(crate) locks: Vec<(JsonPointer, LockerGuard)>,
+    pub(crate) locks: Vec<(JsonPointer, Option<LockerGuard>)>,
     pub(crate) updates: DiffPatch,
     pub(crate) sub: Receiver<Arc<Revision>>,
 }
@@ -94,7 +94,7 @@ impl<Parent: DbHandle + Send + Sync> DbHandle for Transaction<Parent> {
     fn subscribe(&self) -> Receiver<Arc<Revision>> {
         self.parent.subscribe()
     }
-    fn locker_and_locks(&mut self) -> (&Locker, Vec<&mut [(JsonPointer, LockerGuard)]>) {
+    fn locker_and_locks(&mut self) -> (&Locker, Vec<&mut [(JsonPointer, Option<LockerGuard>)]>) {
         let (locker, mut locks) = self.parent.locker_and_locks();
         locks.push(&mut self.locks);
         (locker, locks)
@@ -162,27 +162,9 @@ impl<Parent: DbHandle + Send + Sync> DbHandle for Transaction<Parent> {
         self.updates.append(patch);
         Ok(None)
     }
-    async fn lock<S: AsRef<str> + Clone + Send + Sync, V: SegList + Clone + Send + Sync>(
-        &mut self,
-        ptr: &JsonPointer<S, V>,
-        lock: LockType,
-        deep: bool,
-    ) {
-        match lock {
-            LockType::None => (),
-            LockType::Read => {
-                let (locker, mut locks) = self.parent.locker_and_locks();
-                locker
-                    .add_read_lock(ptr, &mut self.locks, &mut locks, deep)
-                    .await
-            }
-            LockType::Write => {
-                let (locker, mut locks) = self.parent.locker_and_locks();
-                locker
-                    .add_write_lock(ptr, &mut self.locks, &mut locks, deep)
-                    .await
-            }
-        }
+    async fn lock(&mut self, ptr: &JsonPointer) {
+        let (locker, mut locks) = self.parent.locker_and_locks();
+        locker.add_lock(ptr, &mut self.locks, &mut locks).await
     }
     async fn get<
         T: for<'de> Deserialize<'de>,
