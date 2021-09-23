@@ -12,7 +12,7 @@ use tokio::sync::{RwLock, RwLockReadGuard};
 use crate::store::Store;
 use crate::Error;
 use crate::{
-    locker::{Locker, LockerGuard},
+    locker::{Guard, Locker},
     DbHandle,
 };
 use crate::{
@@ -21,8 +21,9 @@ use crate::{
 };
 
 pub struct Transaction<Parent: DbHandle> {
+    pub(crate) id: usize,
     pub(crate) parent: Parent,
-    pub(crate) locks: Vec<(JsonPointer, Option<LockerGuard>)>,
+    pub(crate) locks: Vec<Guard>,
     pub(crate) updates: DiffPatch,
     pub(crate) sub: Receiver<Arc<Revision>>,
 }
@@ -71,11 +72,15 @@ impl<Parent: DbHandle + Send + Sync> DbHandle for Transaction<Parent> {
         let sub = self.parent.subscribe();
         drop(store);
         Ok(Transaction {
+            id: self.id(),
             parent: self,
             locks: Vec::new(),
             updates: DiffPatch::default(),
             sub,
         })
+    }
+    fn id(&self) -> usize {
+        self.id
     }
     fn rebase(&mut self) -> Result<(), Error> {
         self.parent.rebase()?;
@@ -94,10 +99,8 @@ impl<Parent: DbHandle + Send + Sync> DbHandle for Transaction<Parent> {
     fn subscribe(&self) -> Receiver<Arc<Revision>> {
         self.parent.subscribe()
     }
-    fn locker_and_locks(&mut self) -> (&Locker, Vec<&mut [(JsonPointer, Option<LockerGuard>)]>) {
-        let (locker, mut locks) = self.parent.locker_and_locks();
-        locks.push(&mut self.locks);
-        (locker, locks)
+    fn locker(&self) -> &Locker {
+        self.parent.locker()
     }
     async fn exists<S: AsRef<str> + Send + Sync, V: SegList + Send + Sync>(
         &mut self,
@@ -162,9 +165,9 @@ impl<Parent: DbHandle + Send + Sync> DbHandle for Transaction<Parent> {
         self.updates.append(patch);
         Ok(None)
     }
-    async fn lock(&mut self, ptr: &JsonPointer) {
-        let (locker, mut locks) = self.parent.locker_and_locks();
-        locker.add_lock(ptr, &mut self.locks, &mut locks).await
+    async fn lock(&mut self, ptr: JsonPointer, write: bool) {
+        self.locks
+            .push(self.parent.locker().lock(self.id, ptr, write).await)
     }
     async fn get<
         T: for<'de> Deserialize<'de>,
