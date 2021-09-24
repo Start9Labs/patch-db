@@ -181,6 +181,11 @@ fn build_model_struct(
                             &self.0
                         }
                     }
+                    impl core::ops::DerefMut for #model_name {
+                        fn deref_mut(&mut self) -> &mut Self::Target {
+                            &mut self.0
+                        }
+                    }
                     impl From<patch_db::json_ptr::JsonPointer> for #model_name {
                         fn from(ptr: patch_db::json_ptr::JsonPointer) -> Self {
                             #model_name(#inner_model::from(ptr))
@@ -276,6 +281,11 @@ fn build_model_struct(
                 &self.0
             }
         }
+        impl core::ops::DerefMut for #model_name {
+            fn deref_mut(&mut self) -> &mut Self::Target {
+                &mut self.0
+            }
+        }
         impl #model_name {
             #(
                 pub fn #child_fn_name(self) -> #child_model {
@@ -325,6 +335,11 @@ fn build_model_enum(base: &DeriveInput, _: &DataEnum, model_name: Option<Ident>)
             type Target = patch_db::Model<#base_name>;
             fn deref(&self) -> &Self::Target {
                 &self.0
+            }
+        }
+        impl core::ops::DerefMut for #model_name {
+            fn deref_mut(&mut self) -> &mut Self::Target {
+                &mut self.0
             }
         }
         impl From<patch_db::json_ptr::JsonPointer> for #model_name {

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 
 use json_ptr::JsonPointer;
 use tokio::sync::{mpsc, oneshot};
@@ -61,7 +61,7 @@ impl Drop for Guard {
 struct Node {
     readers: Vec<usize>,
     writers: HashSet<usize>,
-    reqs: VecDeque<Option<Request>>,
+    reqs: Vec<Request>,
 }
 impl Node {
     fn write_free(&self, id: usize) -> bool {
@@ -70,11 +70,17 @@ impl Node {
     fn read_free(&self, id: usize) -> bool {
         self.readers.is_empty() || (self.readers.iter().filter(|a| a != &&id).count() == 0)
     }
+    // allow a lock to skip the queue if a lock is already held by the same handle
+    fn can_jump_queue(&self, id: usize) -> bool {
+        self.writers.contains(&id) || self.readers.contains(&id)
+    }
     fn write_available(&self, id: usize) -> bool {
-        self.write_free(id) && self.read_free(id) && self.reqs.is_empty()
+        self.write_free(id)
+            && self.read_free(id)
+            && (self.reqs.is_empty() || self.can_jump_queue(id))
     }
     fn read_available(&self, id: usize) -> bool {
-        self.write_free(id) && self.reqs.is_empty()
+        self.write_free(id) && (self.reqs.is_empty() || self.can_jump_queue(id))
     }
     fn handle_request(
         &mut self,
@@ -88,7 +94,7 @@ impl Node {
             self.readers.push(req.lock_info.handle_id);
             req.process(returned_locks)
         } else {
-            self.reqs.push_back(Some(req));
+            self.reqs.push(req);
             None
         }
     }
@@ -120,31 +126,15 @@ impl Node {
         &mut self,
         returned_locks: &mut Vec<oneshot::Receiver<LockInfo>>,
     ) -> Vec<Request> {
-        let mut ids_processed = HashSet::new();
-        let mut only_matching = false;
         let mut res = Vec::new();
-        let mut tmp_reqs = std::mem::take(&mut self.reqs);
-        for req_opt in &mut tmp_reqs {
-            if let Some(req) = req_opt {
-                if !only_matching || ids_processed.contains(&req.lock_info.handle_id) {
-                    if (req.lock_info.write() && self.write_available(req.lock_info.handle_id))
-                        || self.read_available(req.lock_info.handle_id)
-                    {
-                        ids_processed.insert(req.lock_info.handle_id);
-                        if let Some(req) = req_opt.take() {
-                            if let Some(req) = self.handle_request(req, returned_locks) {
-                                res.push(req);
-                            }
-                        }
-                    } else {
-                        only_matching = true;
-                    }
+        for req in std::mem::take(&mut self.reqs) {
+            if (req.lock_info.write() && self.write_available(req.lock_info.handle_id))
+                || self.read_available(req.lock_info.handle_id)
+            {
+                if let Some(req) = self.handle_request(req, returned_locks) {
+                    res.push(req);
                 }
             }
-        }
-        self.reqs = tmp_reqs;
-        while matches!(self.reqs.get(0), Some(&None)) {
-            self.reqs.pop_front();
         }
         res
     }
