@@ -14,8 +14,12 @@ impl LockInfo {
     fn write(&self) -> bool {
         self.write && self.segments_handled == self.ptr.len()
     }
-    fn next_seg(&self) -> Option<&str> {
-        self.ptr.get_segment(self.segments_handled)
+    fn current_seg(&self) -> Option<&str> {
+        if self.segments_handled == 0 {
+            Some("") // root
+        } else {
+            self.ptr.get_segment(self.segments_handled - 1)
+        }
     }
 }
 
@@ -57,7 +61,7 @@ impl Drop for Guard {
     }
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct Node {
     readers: Vec<usize>,
     writers: HashSet<usize>,
@@ -140,7 +144,7 @@ impl Node {
     }
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct Trie {
     node: Node,
     children: HashMap<String, Trie>,
@@ -158,7 +162,7 @@ impl Trie {
         returned_locks: &mut Vec<oneshot::Receiver<LockInfo>>,
     ) {
         if let Some(req) = self.node.handle_request(req, returned_locks) {
-            if let Some(seg) = req.lock_info.next_seg() {
+            if let Some(seg) = req.lock_info.current_seg() {
                 self.child_mut(seg).handle_request(req, returned_locks)
             }
         }
@@ -173,7 +177,7 @@ impl Trie {
             self.handle_request(req, returned_locks);
         }
         if let Some(release) = release {
-            if let Some(seg) = release.next_seg() {
+            if let Some(seg) = release.current_seg() {
                 self.child_mut(seg).handle_release(release, returned_locks)
             }
         }
@@ -192,14 +196,19 @@ impl Locker {
                 closed: false,
                 recv: receiver,
             };
-            let mut returned_locks = Vec::new();
+            let (_non_empty_send, non_empty_recv) = oneshot::channel();
+            let mut returned_locks = vec![non_empty_recv];
             while let Some(action) = get_action(&mut new_requests, &mut returned_locks).await {
+                #[cfg(feature = "log")]
+                log::trace!("Locker Action: {:#?}", action);
                 match action {
                     Action::HandleRequest(req) => trie.handle_request(req, &mut returned_locks),
                     Action::HandleRelease(lock_info) => {
                         trie.handle_release(lock_info, &mut returned_locks)
                     }
                 }
+                #[cfg(feature = "log")]
+                log::trace!("Locker Trie: {:#?}", trie);
             }
         });
         Locker { sender }
