@@ -21,7 +21,7 @@ use crate::{
 };
 
 pub struct Transaction<Parent: DbHandle> {
-    pub(crate) id: usize,
+    pub(crate) id: u64,
     pub(crate) parent: Parent,
     pub(crate) locks: Vec<Guard>,
     pub(crate) updates: DiffPatch,
@@ -79,7 +79,7 @@ impl<Parent: DbHandle + Send + Sync> DbHandle for Transaction<Parent> {
             sub,
         })
     }
-    fn id(&self) -> usize {
+    fn id(&self) -> u64 {
         self.id
     }
     fn rebase(&mut self) -> Result<(), Error> {
