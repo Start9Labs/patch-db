@@ -23,7 +23,6 @@ lazy_static = "1.4.0"
 log = { version = "*", optional = true }
 nix = "0.20.0"
 patch-db-macro = { path = "../patch-db-macro" }
-qutex = { path = "../qutex", package = "qutex-2" }
 serde = { version = "1.0.118", features = ["rc"] }
 serde_cbor = { path = "../cbor" }
 serde_json = "1.0.61"
