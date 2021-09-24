@@ -6,5 +6,4 @@ members = [
     "cbor",
     "json-patch",
     "json-ptr",
-    "qutex",
 ]
