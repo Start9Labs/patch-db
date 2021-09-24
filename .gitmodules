@@ -7,6 +7,3 @@
 [submodule "json-ptr"]
 	path = json-ptr
 	url = git@github.com:dr-bonez/json-ptr.git
-[submodule "qutex"]
-	path = qutex
-	url = git@github.com:dr-bonez/qutex.git
