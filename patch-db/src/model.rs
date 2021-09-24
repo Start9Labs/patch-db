@@ -22,7 +22,7 @@ impl<T: Serialize + for<'de> Deserialize<'de>> Deref for ModelData<T> {
     }
 }
 impl<T: Serialize + for<'de> Deserialize<'de>> ModelData<T> {
-    pub fn to_owned(self) -> T {
+    pub fn into_owned(self) -> T {
         self.0
     }
 }
@@ -167,12 +167,31 @@ impl<
 {
 }
 
+macro_rules! impl_simple_has_model {
+    ($($ty:ty),*) => {
+        $(
+            impl HasModel for $ty {
+                type Model = Model<$ty>;
+            }
+        )*
+    };
+}
+
+impl_simple_has_model!(
+    bool, char, f32, f64, i128, i16, i32, i64, i8, isize, u128, u16, u32, u64, u8, usize, String
+);
+
 #[derive(Debug)]
 pub struct BoxModel<T: HasModel + Serialize + for<'de> Deserialize<'de>>(T::Model);
 impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> Deref for BoxModel<T> {
     type Target = T::Model;
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> DerefMut for BoxModel<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> From<Model<Box<T>>> for BoxModel<T> {
@@ -260,13 +279,13 @@ impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> OptionModel<T> {
     }
 
     pub fn and_then<
-        F: FnOnce(T::Model) -> U::Model,
+        F: FnOnce(T::Model) -> OptionModel<U>,
         U: Serialize + for<'de> Deserialize<'de> + HasModel,
     >(
         self,
         f: F,
     ) -> OptionModel<U> {
-        OptionModel(f(self.0))
+        f(self.0)
     }
 
     pub async fn delete<Db: DbHandle>(&self, db: &mut Db) -> Result<Option<Arc<Revision>>, Error> {
@@ -277,14 +296,14 @@ impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> OptionModel<T> {
 impl<T> OptionModel<T>
 where
     T: HasModel + Serialize + for<'de> Deserialize<'de>,
-    T::Model: AsMut<Model<T>>,
+    T::Model: DerefMut<Target = Model<T>>,
 {
     pub async fn check<Db: DbHandle>(mut self, db: &mut Db) -> Result<Option<T::Model>, Error> {
         let lock = db
             .locker()
             .lock(db.id(), self.0.as_ref().clone(), false)
             .await;
-        self.0.as_mut().lock = Some(Arc::new(lock));
+        self.0.lock = Some(Arc::new(lock));
         Ok(if self.exists(db, false).await? {
             Some(self.0)
         } else {
@@ -353,6 +372,11 @@ impl<T: Serialize + for<'de> Deserialize<'de>> Deref for VecModel<T> {
     type Target = Model<Vec<T>>;
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+impl<T: Serialize + for<'de> Deserialize<'de>> DerefMut for VecModel<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 impl<T: Serialize + for<'de> Deserialize<'de>> VecModel<T> {
@@ -441,6 +465,15 @@ where
     type Target = Model<T>;
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+impl<T> DerefMut for MapModel<T>
+where
+    T: Serialize + for<'de> Deserialize<'de> + Map,
+    T::Value: Serialize + for<'de> Deserialize<'de>,
+{
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 impl<T> std::clone::Clone for MapModel<T>
