@@ -9,24 +9,23 @@ use fd_lock_rs::FdLock;
 use indexmap::IndexSet;
 use json_ptr::{JsonPointer, SegList};
 use lazy_static::lazy_static;
-use qutex::{Guard, Qutex};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::fs::File;
 use tokio::sync::broadcast::{Receiver, Sender};
-use tokio::sync::{Mutex, RwLock, RwLockWriteGuard};
+use tokio::sync::{Mutex, OwnedMutexGuard, RwLock, RwLockWriteGuard};
 
 use crate::patch::{diff, DiffPatch, Dump, Revision};
 use crate::Error;
 use crate::{locker::Locker, PatchDbHandle};
 
 lazy_static! {
-    static ref OPEN_STORES: Mutex<HashMap<PathBuf, Qutex<()>>> = Mutex::new(HashMap::new());
+    static ref OPEN_STORES: Mutex<HashMap<PathBuf, Arc<Mutex<()>>>> = Mutex::new(HashMap::new());
 }
 
 pub struct Store {
     file: FdLock<File>,
-    _lock: Guard<()>,
+    _lock: OwnedMutexGuard<()>,
     cache_corrupted: Option<Arc<IOError>>,
     data: Value,
     revision: u64,
@@ -41,11 +40,11 @@ impl Store {
             let mut lock = OPEN_STORES.lock().await;
             (
                 if let Some(open) = lock.get(&path) {
-                    open.clone().lock().await.unwrap()
+                    open.clone().lock_owned().await
                 } else {
-                    let tex = Qutex::new(());
+                    let tex = Arc::new(Mutex::new(()));
                     lock.insert(path.clone(), tex.clone());
-                    tex.lock().await.unwrap()
+                    tex.lock_owned().await
                 },
                 path,
             )
