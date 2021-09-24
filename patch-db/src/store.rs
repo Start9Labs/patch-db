@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::Error as IOError;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 use fd_lock_rs::FdLock;
@@ -210,7 +210,7 @@ pub struct PatchDb {
     pub(crate) store: Arc<RwLock<Store>>,
     subscriber: Arc<Sender<Arc<Revision>>>,
     pub(crate) locker: Arc<Locker>,
-    handle_id: Arc<AtomicUsize>,
+    handle_id: Arc<AtomicU64>,
 }
 impl PatchDb {
     pub async fn open<P: AsRef<Path>>(path: P) -> Result<Self, Error> {
@@ -220,7 +220,7 @@ impl PatchDb {
             store: Arc::new(RwLock::new(Store::open(path).await?)),
             locker: Arc::new(Locker::new()),
             subscriber: Arc::new(subscriber),
-            handle_id: Arc::new(AtomicUsize::new(0)),
+            handle_id: Arc::new(AtomicU64::new(0)),
         })
     }
     pub async fn dump(&self) -> Dump {

@@ -13,7 +13,7 @@ use crate::{patch::DiffPatch, Error};
 #[async_trait]
 pub trait DbHandle: Send + Sync {
     async fn begin<'a>(&'a mut self) -> Result<Transaction<&'a mut Self>, Error>;
-    fn id(&self) -> usize;
+    fn id(&self) -> u64;
     fn rebase(&mut self) -> Result<(), Error>;
     fn store(&self) -> Arc<RwLock<Store>>;
     fn subscribe(&self) -> Receiver<Arc<Revision>>;
@@ -75,7 +75,7 @@ impl<Handle: DbHandle + ?Sized> DbHandle for &mut Handle {
             sub,
         })
     }
-    fn id(&self) -> usize {
+    fn id(&self) -> u64 {
         (**self).id()
     }
     fn rebase(&mut self) -> Result<(), Error> {
@@ -148,7 +148,7 @@ impl<Handle: DbHandle + ?Sized> DbHandle for &mut Handle {
 }
 
 pub struct PatchDbHandle {
-    pub(crate) id: usize,
+    pub(crate) id: u64,
     pub(crate) db: PatchDb,
     pub(crate) locks: Vec<Guard>,
 }
@@ -164,7 +164,7 @@ impl DbHandle for PatchDbHandle {
             updates: DiffPatch::default(),
         })
     }
-    fn id(&self) -> usize {
+    fn id(&self) -> u64 {
         self.id
     }
     fn rebase(&mut self) -> Result<(), Error> {
