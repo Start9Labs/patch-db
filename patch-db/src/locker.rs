@@ -56,6 +56,7 @@ struct RequestQueue {
     recv: mpsc::UnboundedReceiver<Request>,
 }
 
+#[derive(Debug)]
 enum Action {
     HandleRequest(Request),
     HandleRelease(LockInfo),
