@@ -200,12 +200,8 @@ impl Node {
     ) -> Vec<Request> {
         let mut res = Vec::new();
         for req in std::mem::take(&mut self.reqs) {
-            if (req.lock_info.write() && self.write_available(req.lock_info.handle_id))
-                || self.read_available(req.lock_info.handle_id)
-            {
-                if let Some(req) = self.handle_request(req, locks_on_lease) {
-                    res.push(req);
-                }
+            if let Some(req) = self.handle_request(req, locks_on_lease) {
+                res.push(req);
             }
         }
         res

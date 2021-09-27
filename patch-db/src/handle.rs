@@ -152,7 +152,14 @@ pub struct PatchDbHandle {
     pub(crate) db: PatchDb,
     pub(crate) locks: Vec<Guard>,
 }
-
+impl std::fmt::Debug for PatchDbHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PatchDbHandle")
+            .field("id", &self.id)
+            .field("locks", &self.locks)
+            .finish()
+    }
+}
 #[async_trait]
 impl DbHandle for PatchDbHandle {
     async fn begin<'a>(&'a mut self) -> Result<Transaction<&'a mut Self>, Error> {
