@@ -6,11 +6,11 @@ use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 use fd_lock_rs::FdLock;
-use indexmap::IndexSet;
 use json_ptr::{JsonPointer, SegList};
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeSet;
 use tokio::fs::File;
 use tokio::sync::broadcast::{Receiver, Sender};
 use tokio::sync::{Mutex, OwnedMutexGuard, RwLock, RwLockWriteGuard};
@@ -132,10 +132,10 @@ impl Store {
     pub(crate) fn keys<S: AsRef<str>, V: SegList>(
         &self,
         ptr: &JsonPointer<S, V>,
-    ) -> Result<IndexSet<String>, Error> {
+    ) -> Result<BTreeSet<String>, Error> {
         Ok(match ptr.get(self.get_data()?).unwrap_or(&Value::Null) {
             Value::Object(o) => o.keys().cloned().collect(),
-            _ => IndexSet::new(),
+            _ => BTreeSet::new(),
         })
     }
     pub(crate) fn get<T: for<'de> Deserialize<'de>, S: AsRef<str>, V: SegList>(
@@ -240,7 +240,7 @@ impl PatchDb {
     pub async fn keys<S: AsRef<str>, V: SegList>(
         &self,
         ptr: &JsonPointer<S, V>,
-    ) -> Result<IndexSet<String>, Error> {
+    ) -> Result<BTreeSet<String>, Error> {
         self.store.read().await.keys(ptr)
     }
     pub async fn get<T: for<'de> Deserialize<'de>, S: AsRef<str>, V: SegList>(

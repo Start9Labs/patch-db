@@ -1,10 +1,10 @@
 use std::ops::Deref;
 
-use indexmap::IndexSet;
 use json_patch::{AddOperation, Patch, PatchOperation, RemoveOperation, ReplaceOperation};
 use json_ptr::{JsonPointer, SegList};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -185,7 +185,7 @@ impl DiffPatch {
         res
     }
 
-    pub fn keys(&self, mut keys: IndexSet<String>) -> IndexSet<String> {
+    pub fn keys(&self, mut keys: BTreeSet<String>) -> BTreeSet<String> {
         for op in &(self.0).0 {
             match op {
                 PatchOperation::Add(a) => {
