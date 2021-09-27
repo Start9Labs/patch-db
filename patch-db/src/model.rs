@@ -1,10 +1,9 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
-use indexmap::{IndexMap, IndexSet};
 use json_patch::{Patch, PatchOperation, RemoveOperation};
 use json_ptr::JsonPointer;
 use serde::{Deserialize, Serialize};
@@ -444,13 +443,6 @@ impl<K: AsRef<str> + Ord, V> Map for BTreeMap<K, V> {
         self.get(key)
     }
 }
-impl<K: AsRef<str> + Eq + Hash, V> Map for IndexMap<K, V> {
-    type Key = K;
-    type Value = V;
-    fn get(&self, key: &Self::Key) -> Option<&Self::Value> {
-        IndexMap::get(self, key)
-    }
-}
 
 #[derive(Debug)]
 pub struct MapModel<T>(Model<T>)
@@ -497,14 +489,14 @@ where
 impl<T> MapModel<T>
 where
     T: Serialize + for<'de> Deserialize<'de> + Map,
-    T::Key: Hash + Eq + for<'de> Deserialize<'de>,
+    T::Key: Ord + Eq + for<'de> Deserialize<'de>,
     T::Value: Serialize + for<'de> Deserialize<'de>,
 {
     pub async fn keys<Db: DbHandle>(
         &self,
         db: &mut Db,
         lock: bool,
-    ) -> Result<IndexSet<T::Key>, Error> {
+    ) -> Result<BTreeSet<T::Key>, Error> {
         if lock {
             db.lock(self.as_ref().clone(), false).await;
         }
@@ -583,11 +575,4 @@ where
     V: Serialize + for<'de> Deserialize<'de>,
 {
     type Model = MapModel<BTreeMap<K, V>>;
-}
-impl<K, V> HasModel for IndexMap<K, V>
-where
-    K: Serialize + for<'de> Deserialize<'de> + Hash + Eq + AsRef<str>,
-    V: Serialize + for<'de> Deserialize<'de>,
-{
-    type Model = MapModel<IndexMap<K, V>>;
 }
