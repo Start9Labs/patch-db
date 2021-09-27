@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use indexmap::IndexSet;
 use json_ptr::{JsonPointer, SegList};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeSet;
 use tokio::sync::broadcast::error::TryRecvError;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::{RwLock, RwLockReadGuard};
@@ -123,7 +123,7 @@ impl<Parent: DbHandle + Send + Sync> DbHandle for Transaction<Parent> {
         &mut self,
         ptr: &JsonPointer<S, V>,
         store_read_lock: Option<RwLockReadGuard<'_, Store>>,
-    ) -> Result<IndexSet<String>, Error> {
+    ) -> Result<BTreeSet<String>, Error> {
         let keys = {
             let store_lock = self.parent.store();
             let store = if let Some(store_read_lock) = store_read_lock {

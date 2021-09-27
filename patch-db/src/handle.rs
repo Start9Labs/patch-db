@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use indexmap::IndexSet;
 use json_ptr::{JsonPointer, SegList};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeSet;
 use tokio::sync::{broadcast::Receiver, RwLock, RwLockReadGuard};
 
 use crate::{locker::Guard, Locker, PatchDb, Revision, Store, Transaction};
@@ -27,7 +27,7 @@ pub trait DbHandle: Send + Sync {
         &mut self,
         ptr: &JsonPointer<S, V>,
         store_read_lock: Option<RwLockReadGuard<'_, Store>>,
-    ) -> Result<IndexSet<String>, Error>;
+    ) -> Result<BTreeSet<String>, Error>;
     async fn get_value<S: AsRef<str> + Send + Sync, V: SegList + Send + Sync>(
         &mut self,
         ptr: &JsonPointer<S, V>,
@@ -101,7 +101,7 @@ impl<Handle: DbHandle + ?Sized> DbHandle for &mut Handle {
         &mut self,
         ptr: &JsonPointer<S, V>,
         store_read_lock: Option<RwLockReadGuard<'_, Store>>,
-    ) -> Result<IndexSet<String>, Error> {
+    ) -> Result<BTreeSet<String>, Error> {
         (*self).keys(ptr, store_read_lock).await
     }
     async fn get_value<S: AsRef<str> + Send + Sync, V: SegList + Send + Sync>(
@@ -201,7 +201,7 @@ impl DbHandle for PatchDbHandle {
         &mut self,
         ptr: &JsonPointer<S, V>,
         store_read_lock: Option<RwLockReadGuard<'_, Store>>,
-    ) -> Result<IndexSet<String>, Error> {
+    ) -> Result<BTreeSet<String>, Error> {
         if let Some(lock) = store_read_lock {
             lock.keys(ptr)
         } else {
