@@ -112,8 +112,8 @@ impl Trie {
         lock_info: LockInfo,
         locks_on_lease: &mut Vec<oneshot::Receiver<LockInfo>>,
     ) {
-        let (release, reqs) = self.node.handle_release(lock_info, locks_on_lease);
-        for req in reqs {
+        let release = self.node.release(lock_info);
+        for req in std::mem::take(&mut self.node.reqs) {
             self.handle_request(req, locks_on_lease);
         }
         if let Some(release) = release {
@@ -186,25 +186,6 @@ impl Node {
             lock_info.segments_handled += 1;
             Some(lock_info)
         }
-    }
-    fn handle_release(
-        &mut self,
-        lock_info: LockInfo,
-        locks_on_lease: &mut Vec<oneshot::Receiver<LockInfo>>,
-    ) -> (Option<LockInfo>, Vec<Request>) {
-        (self.release(lock_info), self.process_queue(locks_on_lease))
-    }
-    fn process_queue(
-        &mut self,
-        locks_on_lease: &mut Vec<oneshot::Receiver<LockInfo>>,
-    ) -> Vec<Request> {
-        let mut res = Vec::new();
-        for req in std::mem::take(&mut self.reqs) {
-            if let Some(req) = self.handle_request(req, locks_on_lease) {
-                res.push(req);
-            }
-        }
-        res
     }
 }
 
