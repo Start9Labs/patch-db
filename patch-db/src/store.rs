@@ -15,6 +15,7 @@ use tokio::fs::File;
 use tokio::sync::broadcast::{Receiver, Sender};
 use tokio::sync::{Mutex, OwnedMutexGuard, RwLock, RwLockWriteGuard};
 
+use crate::handle::HandleId;
 use crate::patch::{diff, DiffPatch, Dump, Revision};
 use crate::Error;
 use crate::{locker::Locker, PatchDbHandle};
@@ -284,9 +285,10 @@ impl PatchDb {
     }
     pub fn handle(&self) -> PatchDbHandle {
         PatchDbHandle {
-            id: self
-                .handle_id
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+            id: HandleId(
+                self.handle_id
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+            ),
             db: self.clone(),
             locks: Vec::new(),
         }

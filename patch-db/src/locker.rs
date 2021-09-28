@@ -1,7 +1,9 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::BTreeMap;
 
 use json_ptr::JsonPointer;
 use tokio::sync::{mpsc, oneshot};
+
+use crate::handle::HandleId;
 
 pub struct Locker {
     sender: mpsc::UnboundedSender<Request>,
@@ -34,7 +36,7 @@ impl Locker {
         });
         Locker { sender }
     }
-    pub async fn lock(&self, handle_id: u64, ptr: JsonPointer, write: bool) -> Guard {
+    pub async fn lock(&self, handle_id: HandleId, ptr: JsonPointer, write: bool) -> Guard {
         let (send, recv) = oneshot::channel();
         self.sender
             .send(Request {
@@ -88,7 +90,7 @@ async fn get_action(
 #[derive(Debug, Default)]
 struct Trie {
     node: Node,
-    children: HashMap<String, Trie>,
+    children: BTreeMap<String, Trie>,
 }
 impl Trie {
     fn child_mut(&mut self, name: &str) -> &mut Self {
@@ -125,31 +127,31 @@ impl Trie {
 
 #[derive(Debug, Default)]
 struct Node {
-    readers: Vec<u64>,
-    writers: Vec<u64>,
+    readers: Vec<HandleId>,
+    writers: Vec<HandleId>,
     reqs: Vec<Request>,
 }
 impl Node {
     // true: If there are any writers, it is `id`.
-    fn write_free(&self, id: u64) -> bool {
-        self.writers.is_empty() || (self.writers.iter().filter(|a| a != &&id).count() == 0)
+    fn write_free(&self, id: &HandleId) -> bool {
+        self.writers.is_empty() || (self.writers.iter().filter(|a| a != &id).count() == 0)
     }
     // true: If there are any readers, it is `id`.
-    fn read_free(&self, id: u64) -> bool {
-        self.readers.is_empty() || (self.readers.iter().filter(|a| a != &&id).count() == 0)
+    fn read_free(&self, id: &HandleId) -> bool {
+        self.readers.is_empty() || (self.readers.iter().filter(|a| a != &id).count() == 0)
     }
     // allow a lock to skip the queue if a lock is already held by the same handle
-    fn can_jump_queue(&self, id: u64) -> bool {
+    fn can_jump_queue(&self, id: &HandleId) -> bool {
         self.writers.contains(&id) || self.readers.contains(&id)
     }
     // `id` is capable of acquiring this node for writing
-    fn write_available(&self, id: u64) -> bool {
+    fn write_available(&self, id: &HandleId) -> bool {
         self.write_free(id)
             && self.read_free(id)
             && (self.reqs.is_empty() || self.can_jump_queue(id))
     }
     // `id` is capable of acquiring this node for reading
-    fn read_available(&self, id: u64) -> bool {
+    fn read_available(&self, id: &HandleId) -> bool {
         self.write_free(id) && (self.reqs.is_empty() || self.can_jump_queue(id))
     }
     fn handle_request(
@@ -157,11 +159,11 @@ impl Node {
         req: Request,
         locks_on_lease: &mut Vec<oneshot::Receiver<LockInfo>>,
     ) -> Option<Request> {
-        if req.lock_info.write() && self.write_available(req.lock_info.handle_id) {
-            self.writers.push(req.lock_info.handle_id);
+        if req.lock_info.write() && self.write_available(&req.lock_info.handle_id) {
+            self.writers.push(req.lock_info.handle_id.clone());
             req.process(locks_on_lease)
-        } else if !req.lock_info.write() && self.read_available(req.lock_info.handle_id) {
-            self.readers.push(req.lock_info.handle_id);
+        } else if !req.lock_info.write() && self.read_available(&req.lock_info.handle_id) {
+            self.readers.push(req.lock_info.handle_id.clone());
             req.process(locks_on_lease)
         } else {
             self.reqs.push(req);
@@ -202,7 +204,7 @@ struct LockInfo {
     ptr: JsonPointer,
     segments_handled: usize,
     write: bool,
-    handle_id: u64,
+    handle_id: HandleId,
 }
 impl LockInfo {
     fn write(&self) -> bool {

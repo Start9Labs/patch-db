@@ -9,7 +9,6 @@ use json_ptr::JsonPointer;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::locker::Guard;
 use crate::{DbHandle, DiffPatch, Error, Revision};
 
 #[derive(Debug)]
@@ -59,7 +58,6 @@ impl<T: Serialize + for<'de> Deserialize<'de>> DerefMut for ModelDataMut<T> {
 pub struct Model<T: Serialize + for<'de> Deserialize<'de>> {
     ptr: JsonPointer,
     phantom: PhantomData<T>,
-    lock: Option<Arc<Guard>>,
 }
 impl<T> Model<T>
 where
@@ -93,7 +91,6 @@ where
         Model {
             ptr,
             phantom: PhantomData,
-            lock: self.lock,
         }
     }
 }
@@ -118,7 +115,6 @@ where
         Self {
             ptr,
             phantom: PhantomData,
-            lock: None,
         }
     }
 }
@@ -146,7 +142,6 @@ where
         Model {
             ptr: self.ptr.clone(),
             phantom: PhantomData,
-            lock: self.lock.clone(),
         }
     }
 }
@@ -297,13 +292,8 @@ where
     T: HasModel + Serialize + for<'de> Deserialize<'de>,
     T::Model: DerefMut<Target = Model<T>>,
 {
-    pub async fn check<Db: DbHandle>(mut self, db: &mut Db) -> Result<Option<T::Model>, Error> {
-        let lock = db
-            .locker()
-            .lock(db.id(), self.0.as_ref().clone(), false)
-            .await;
-        self.0.lock = Some(Arc::new(lock));
-        Ok(if self.exists(db, false).await? {
+    pub async fn check<Db: DbHandle>(self, db: &mut Db) -> Result<Option<T::Model>, Error> {
+        Ok(if self.exists(db, true).await? {
             Some(self.0)
         } else {
             None

@@ -9,6 +9,7 @@ use tokio::sync::broadcast::error::TryRecvError;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::{RwLock, RwLockReadGuard};
 
+use crate::handle::HandleId;
 use crate::store::Store;
 use crate::Error;
 use crate::{
@@ -21,7 +22,7 @@ use crate::{
 };
 
 pub struct Transaction<Parent: DbHandle> {
-    pub(crate) id: u64,
+    pub(crate) id: HandleId,
     pub(crate) parent: Parent,
     pub(crate) locks: Vec<Guard>,
     pub(crate) updates: DiffPatch,
@@ -79,8 +80,8 @@ impl<Parent: DbHandle + Send + Sync> DbHandle for Transaction<Parent> {
             sub,
         })
     }
-    fn id(&self) -> u64 {
-        self.id
+    fn id(&self) -> HandleId {
+        self.id.clone()
     }
     fn rebase(&mut self) -> Result<(), Error> {
         self.parent.rebase()?;
@@ -167,7 +168,7 @@ impl<Parent: DbHandle + Send + Sync> DbHandle for Transaction<Parent> {
     }
     async fn lock(&mut self, ptr: JsonPointer, write: bool) {
         self.locks
-            .push(self.parent.locker().lock(self.id, ptr, write).await)
+            .push(self.parent.locker().lock(self.id.clone(), ptr, write).await)
     }
     async fn get<
         T: for<'de> Deserialize<'de>,
