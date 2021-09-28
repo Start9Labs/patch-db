@@ -126,13 +126,13 @@ impl Trie {
 #[derive(Debug, Default)]
 struct Node {
     readers: Vec<u64>,
-    writers: HashSet<u64>,
+    writers: Vec<u64>,
     reqs: Vec<Request>,
 }
 impl Node {
     // true: If there are any writers, it is `id`.
     fn write_free(&self, id: u64) -> bool {
-        self.writers.is_empty() || (self.writers.len() == 1 && self.writers.contains(&id))
+        self.writers.is_empty() || (self.writers.iter().filter(|a| a != &&id).count() == 0)
     }
     // true: If there are any readers, it is `id`.
     fn read_free(&self, id: u64) -> bool {
@@ -158,7 +158,7 @@ impl Node {
         locks_on_lease: &mut Vec<oneshot::Receiver<LockInfo>>,
     ) -> Option<Request> {
         if req.lock_info.write() && self.write_available(req.lock_info.handle_id) {
-            self.writers.insert(req.lock_info.handle_id);
+            self.writers.push(req.lock_info.handle_id);
             req.process(locks_on_lease)
         } else if !req.lock_info.write() && self.read_available(req.lock_info.handle_id) {
             self.readers.push(req.lock_info.handle_id);
@@ -170,7 +170,15 @@ impl Node {
     }
     fn release(&mut self, mut lock_info: LockInfo) -> Option<LockInfo> {
         if lock_info.write() {
-            self.writers.remove(&lock_info.handle_id);
+            if let Some(idx) = self
+                .writers
+                .iter()
+                .enumerate()
+                .find(|(_, id)| id == &&lock_info.handle_id)
+                .map(|(idx, _)| idx)
+            {
+                self.writers.swap_remove(idx);
+            }
         } else if let Some(idx) = self
             .readers
             .iter()
@@ -178,7 +186,7 @@ impl Node {
             .find(|(_, id)| id == &&lock_info.handle_id)
             .map(|(idx, _)| idx)
         {
-            self.readers.swap_remove(idx);
+            assert!(lock_info.handle_id == self.readers.swap_remove(idx));
         }
         if lock_info.ptr.len() == lock_info.segments_handled {
             None
