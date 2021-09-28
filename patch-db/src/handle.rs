@@ -10,10 +10,13 @@ use tokio::sync::{broadcast::Receiver, RwLock, RwLockReadGuard};
 use crate::{locker::Guard, Locker, PatchDb, Revision, Store, Transaction};
 use crate::{patch::DiffPatch, Error};
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct HandleId(pub(crate) u64);
+
 #[async_trait]
 pub trait DbHandle: Send + Sync {
     async fn begin<'a>(&'a mut self) -> Result<Transaction<&'a mut Self>, Error>;
-    fn id(&self) -> u64;
+    fn id(&self) -> HandleId;
     fn rebase(&mut self) -> Result<(), Error>;
     fn store(&self) -> Arc<RwLock<Store>>;
     fn subscribe(&self) -> Receiver<Arc<Revision>>;
@@ -75,7 +78,7 @@ impl<Handle: DbHandle + ?Sized> DbHandle for &mut Handle {
             sub,
         })
     }
-    fn id(&self) -> u64 {
+    fn id(&self) -> HandleId {
         (**self).id()
     }
     fn rebase(&mut self) -> Result<(), Error> {
@@ -148,7 +151,7 @@ impl<Handle: DbHandle + ?Sized> DbHandle for &mut Handle {
 }
 
 pub struct PatchDbHandle {
-    pub(crate) id: u64,
+    pub(crate) id: HandleId,
     pub(crate) db: PatchDb,
     pub(crate) locks: Vec<Guard>,
 }
@@ -171,8 +174,8 @@ impl DbHandle for PatchDbHandle {
             updates: DiffPatch::default(),
         })
     }
-    fn id(&self) -> u64 {
-        self.id
+    fn id(&self) -> HandleId {
+        self.id.clone()
     }
     fn rebase(&mut self) -> Result<(), Error> {
         Ok(())
@@ -231,7 +234,7 @@ impl DbHandle for PatchDbHandle {
     }
     async fn lock(&mut self, ptr: JsonPointer, write: bool) {
         self.locks
-            .push(self.db.locker.lock(self.id, ptr, write).await);
+            .push(self.db.locker.lock(self.id.clone(), ptr, write).await);
     }
     async fn get<
         T: for<'de> Deserialize<'de>,

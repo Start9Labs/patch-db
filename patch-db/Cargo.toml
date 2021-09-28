@@ -11,6 +11,8 @@ repository = "https://github.com/Start9Labs/patch-db"
 version = "0.1.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[features]
+debug = ["log"]
 
 [dependencies]
 async-trait = "0.1.42"
@@ -20,7 +22,7 @@ json-patch = { path = "../json-patch" }
 json-ptr = { path = "../json-ptr" }
 lazy_static = "1.4.0"
 log = { version = "*", optional = true }
-nix = "0.20.0"
+nix = "0.22.1"
 patch-db-macro = { path = "../patch-db-macro" }
 serde = { version = "1.0.118", features = ["rc"] }
 serde_cbor = { path = "../cbor" }
