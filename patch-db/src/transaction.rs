@@ -1,25 +1,19 @@
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use json_ptr::{JsonPointer, SegList};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeSet;
 use tokio::sync::broadcast::error::TryRecvError;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::{RwLock, RwLockReadGuard};
 
 use crate::handle::HandleId;
+use crate::locker::{Guard, Locker};
+use crate::patch::{DiffPatch, Revision};
 use crate::store::Store;
-use crate::Error;
-use crate::{
-    locker::{Guard, Locker},
-    DbHandle,
-};
-use crate::{
-    patch::{DiffPatch, Revision},
-    PatchDbHandle,
-};
+use crate::{DbHandle, Error, PatchDbHandle};
 
 pub struct Transaction<Parent: DbHandle> {
     pub(crate) id: HandleId,
