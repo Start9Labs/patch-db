@@ -274,6 +274,8 @@ impl PatchDb {
         } else {
             self.store.write().await
         };
+        #[cfg(feature = "log")]
+        log::trace!("Attempting to apply patch: {:?}", patch);
         let rev = store.apply(patch, expire_id).await?;
         if let Some(rev) = rev.as_ref() {
             self.subscriber.send(rev.clone()).unwrap_or_default(); // ignore errors
