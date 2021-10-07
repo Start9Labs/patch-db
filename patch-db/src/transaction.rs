@@ -146,7 +146,13 @@ impl<Parent: DbHandle + Send + Sync> DbHandle for Transaction<Parent> {
             self.rebase()?;
             self.parent.get_value(ptr, Some(store)).await?
         };
-        json_patch::patch(&mut data, &*self.updates.for_path(ptr))?;
+        let path_updates = self.updates.for_path(ptr);
+        if !(path_updates.0).0.is_empty() {
+            #[cfg(feature = "log")]
+            log::trace!("applying patch {:?} at path {}", path_updates, ptr);
+
+            json_patch::patch(&mut data, &*path_updates)?;
+        }
         Ok(data)
     }
     async fn put_value<S: AsRef<str> + Send + Sync, V: SegList + Send + Sync>(

@@ -177,6 +177,9 @@ impl Store {
             return Ok(None);
         }
 
+        #[cfg(feature = "log")]
+        log::trace!("Attempting to apply patch: {:?}", patch);
+
         self.check_cache_corrupted()?;
         let patch_bin = serde_cbor::to_vec(&*patch)?;
         json_patch::patch(self.get_data_mut()?, &*patch)?;
@@ -274,8 +277,6 @@ impl PatchDb {
         } else {
             self.store.write().await
         };
-        #[cfg(feature = "log")]
-        log::trace!("Attempting to apply patch: {:?}", patch);
         let rev = store.apply(patch, expire_id).await?;
         if let Some(rev) = rev.as_ref() {
             self.subscriber.send(rev.clone()).unwrap_or_default(); // ignore errors
