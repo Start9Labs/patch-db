@@ -52,6 +52,10 @@ export class Store<T extends { [key: string]: any }> {
     this.watchedNodes = { }
     this.stash.clear()
     this.sequence$.next(0)
+    this.cache = {
+      sequence: 0,
+      data: { } as any,
+    }
   }
 
   private handleRevision (revision: Revision): void {
