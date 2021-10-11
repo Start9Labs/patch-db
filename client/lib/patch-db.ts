@@ -1,5 +1,5 @@
 import { merge, Observable, of } from 'rxjs'
-import { concatMap, tap } from 'rxjs/operators'
+import { concatMap, finalize, tap } from 'rxjs/operators'
 import { Source } from './source/source'
 import { Store } from './store'
 import { DBCache, Http } from './types'
@@ -20,6 +20,7 @@ export class PatchDB<T> {
     .pipe(
       tap(update => this.store.update(update)),
       concatMap(() => of(this.store.cache)),
+      finalize(() => this.store.reset()),
     )
   }
 }
