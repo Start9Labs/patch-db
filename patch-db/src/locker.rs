@@ -36,14 +36,14 @@ impl Locker {
         });
         Locker { sender }
     }
-    pub async fn lock(&self, handle_id: HandleId, ptr: JsonPointer, write: bool) -> Guard {
+    pub async fn lock(&self, handle_id: HandleId, ptr: JsonPointer, lock_type: LockType) -> Guard {
         let (send, recv) = oneshot::channel();
         self.sender
             .send(Request {
                 lock_info: LockInfo {
                     handle_id,
                     ptr,
-                    write,
+                    ty: lock_type,
                     segments_handled: 0,
                 },
                 completion: send,
@@ -127,68 +127,141 @@ impl Trie {
 
 #[derive(Debug, Default)]
 struct Node {
+    reader_parents: Vec<HandleId>,
     readers: Vec<HandleId>,
+    writer_parents: Vec<HandleId>,
     writers: Vec<HandleId>,
     reqs: Vec<Request>,
 }
 impl Node {
-    // true: If there are any writers, it is `id`.
-    fn write_free(&self, id: &HandleId) -> bool {
-        self.writers.is_empty() || (self.writers.iter().filter(|a| a != &id).count() == 0)
+    // true: If there are any writer_parents, they are `id`.
+    fn write_parent_free(&self, id: &HandleId) -> bool {
+        self.writer_parents.is_empty() || (self.writer_parents.iter().find(|a| a != &id).is_none())
     }
-    // true: If there are any readers, it is `id`.
+    // true: If there are any writers, they are `id`.
+    fn write_free(&self, id: &HandleId) -> bool {
+        self.writers.is_empty() || (self.writers.iter().find(|a| a != &id).is_none())
+    }
+    // true: If there are any reader_parents, they are `id`.
+    fn read_parent_free(&self, id: &HandleId) -> bool {
+        self.reader_parents.is_empty() || (self.reader_parents.iter().find(|a| a != &id).is_none())
+    }
+    // true: If there are any readers, they are `id`.
     fn read_free(&self, id: &HandleId) -> bool {
-        self.readers.is_empty() || (self.readers.iter().filter(|a| a != &id).count() == 0)
+        self.readers.is_empty() || (self.readers.iter().find(|a| a != &id).is_none())
     }
     // allow a lock to skip the queue if a lock is already held by the same handle
     fn can_jump_queue(&self, id: &HandleId) -> bool {
-        self.writers.contains(&id) || self.readers.contains(&id)
+        self.writers.contains(&id)
+            || self.writer_parents.contains(&id)
+            || self.readers.contains(&id)
+            || self.reader_parents.contains(&id)
     }
-    // `id` is capable of acquiring this node for writing
-    fn write_available(&self, id: &HandleId) -> bool {
+    // `id` is capable of acquiring this node for the purpose of writing to a child
+    fn write_parent_available(&self, id: &HandleId) -> bool {
         self.write_free(id)
             && self.read_free(id)
             && (self.reqs.is_empty() || self.can_jump_queue(id))
     }
+    // `id` is capable of acquiring this node for writing
+    fn write_available(&self, id: &HandleId) -> bool {
+        self.write_free(id)
+            && self.write_parent_free(id)
+            && self.read_free(id)
+            && self.read_parent_free(id)
+            && (self.reqs.is_empty() || self.can_jump_queue(id))
+    }
+    fn read_parent_available(&self, id: &HandleId) -> bool {
+        self.write_free(id) && (self.reqs.is_empty() || self.can_jump_queue(id))
+    }
     // `id` is capable of acquiring this node for reading
     fn read_available(&self, id: &HandleId) -> bool {
-        self.write_free(id) && (self.reqs.is_empty() || self.can_jump_queue(id))
+        self.write_free(id)
+            && self.write_parent_free(id)
+            && (self.reqs.is_empty() || self.can_jump_queue(id))
     }
     fn handle_request(
         &mut self,
         req: Request,
         locks_on_lease: &mut Vec<oneshot::Receiver<LockInfo>>,
     ) -> Option<Request> {
-        if req.lock_info.write() && self.write_available(&req.lock_info.handle_id) {
-            self.writers.push(req.lock_info.handle_id.clone());
-            req.process(locks_on_lease)
-        } else if !req.lock_info.write() && self.read_available(&req.lock_info.handle_id) {
-            self.readers.push(req.lock_info.handle_id.clone());
-            req.process(locks_on_lease)
-        } else {
-            self.reqs.push(req);
-            None
+        match (
+            req.lock_info.ty,
+            req.lock_info.segments_handled == req.lock_info.ptr.len(),
+        ) {
+            (LockType::Write, true) if self.write_available(&req.lock_info.handle_id) => {
+                self.writers.push(req.lock_info.handle_id.clone());
+                req.process(locks_on_lease)
+            }
+            (LockType::DeepRead, true) if self.read_available(&req.lock_info.handle_id) => {
+                self.readers.push(req.lock_info.handle_id.clone());
+                req.process(locks_on_lease)
+            }
+            (LockType::Write, false) if self.write_parent_available(&req.lock_info.handle_id) => {
+                self.writer_parents.push(req.lock_info.handle_id.clone());
+                req.process(locks_on_lease)
+            }
+            (LockType::DeepRead, false) | (LockType::ShallowRead, _)
+                if self.read_parent_available(&req.lock_info.handle_id) =>
+            {
+                self.reader_parents.push(req.lock_info.handle_id.clone());
+                req.process(locks_on_lease)
+            }
+            _ => {
+                self.reqs.push(req);
+                None
+            }
         }
     }
     fn release(&mut self, mut lock_info: LockInfo) -> Option<LockInfo> {
-        if lock_info.write() {
-            if let Some(idx) = self
-                .writers
-                .iter()
-                .enumerate()
-                .find(|(_, id)| id == &&lock_info.handle_id)
-                .map(|(idx, _)| idx)
-            {
-                self.writers.swap_remove(idx);
+        match (
+            lock_info.ty,
+            lock_info.segments_handled == lock_info.ptr.len(),
+        ) {
+            (LockType::Write, true) => {
+                if let Some(idx) = self
+                    .writers
+                    .iter()
+                    .enumerate()
+                    .find(|(_, id)| id == &&lock_info.handle_id)
+                    .map(|(idx, _)| idx)
+                {
+                    self.writers.swap_remove(idx);
+                }
             }
-        } else if let Some(idx) = self
-            .readers
-            .iter()
-            .enumerate()
-            .find(|(_, id)| id == &&lock_info.handle_id)
-            .map(|(idx, _)| idx)
-        {
-            assert!(lock_info.handle_id == self.readers.swap_remove(idx));
+            (LockType::DeepRead, true) => {
+                if let Some(idx) = self
+                    .writers
+                    .iter()
+                    .enumerate()
+                    .find(|(_, id)| id == &&lock_info.handle_id)
+                    .map(|(idx, _)| idx)
+                {
+                    self.readers.swap_remove(idx);
+                }
+            }
+            (LockType::Write, false) => {
+                if let Some(idx) = self
+                    .writer_parents
+                    .iter()
+                    .enumerate()
+                    .find(|(_, id)| id == &&lock_info.handle_id)
+                    .map(|(idx, _)| idx)
+                {
+                    self.writer_parents.swap_remove(idx);
+                }
+            }
+            (LockType::DeepRead, false) | (LockType::ShallowRead, _) => {
+                if let Some(idx) = self
+                    .reader_parents
+                    .iter()
+                    .enumerate()
+                    .find(|(_, id)| id == &&lock_info.handle_id)
+                    .map(|(idx, _)| idx)
+                {
+                    self.reader_parents.swap_remove(idx);
+                }
+            }
         }
         if lock_info.ptr.len() == lock_info.segments_handled {
             None
@@ -203,13 +276,10 @@ impl Node {
 struct LockInfo {
     ptr: JsonPointer,
     segments_handled: usize,
-    write: bool,
+    ty: LockType,
     handle_id: HandleId,
 }
 impl LockInfo {
-    fn write(&self) -> bool {
-        self.write && self.segments_handled == self.ptr.len()
-    }
     fn current_seg(&self) -> &str {
         if self.segments_handled == 0 {
             "" // root
@@ -225,6 +295,18 @@ impl LockInfo {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum LockType {
+    ShallowRead,
+    DeepRead,
+    Write,
+}
+impl Default for LockType {
+    fn default() -> Self {
+        LockType::ShallowRead
+    }
+}
+
 #[derive(Debug)]
 struct Request {
     lock_info: LockInfo,
@@ -233,17 +315,20 @@ struct Request {
 impl Request {
     fn process(mut self, locks_on_lease: &mut Vec<oneshot::Receiver<LockInfo>>) -> Option<Self> {
         if self.lock_info.ptr.len() == self.lock_info.segments_handled {
-            let (sender, receiver) = oneshot::channel();
-            locks_on_lease.push(receiver);
-            let _ = self.completion.send(Guard {
-                lock_info: self.lock_info.reset(),
-                sender: Some(sender),
-            });
+            self.complete(locks_on_lease);
             None
         } else {
             self.lock_info.segments_handled += 1;
             Some(self)
         }
+    }
+    fn complete(self, locks_on_lease: &mut Vec<oneshot::Receiver<LockInfo>>) {
+        let (sender, receiver) = oneshot::channel();
+        locks_on_lease.push(receiver);
+        let _ = self.completion.send(Guard {
+            lock_info: self.lock_info.reset(),
+            sender: Some(sender),
+        });
     }
 }
 
