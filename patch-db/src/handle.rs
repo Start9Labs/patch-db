@@ -7,6 +7,7 @@ use serde_json::Value;
 use std::collections::BTreeSet;
 use tokio::sync::{broadcast::Receiver, RwLock, RwLockReadGuard};
 
+use crate::locker::LockType;
 use crate::{locker::Guard, Locker, PatchDb, Revision, Store, Transaction};
 use crate::{patch::DiffPatch, Error};
 
@@ -42,7 +43,7 @@ pub trait DbHandle: Send + Sync {
         value: &Value,
     ) -> Result<Option<Arc<Revision>>, Error>;
     async fn apply(&mut self, patch: DiffPatch) -> Result<Option<Arc<Revision>>, Error>;
-    async fn lock(&mut self, ptr: JsonPointer, write: bool) -> ();
+    async fn lock(&mut self, ptr: JsonPointer, lock_type: LockType) -> ();
     async fn get<
         T: for<'de> Deserialize<'de>,
         S: AsRef<str> + Send + Sync,
@@ -124,8 +125,8 @@ impl<Handle: DbHandle + ?Sized> DbHandle for &mut Handle {
     async fn apply(&mut self, patch: DiffPatch) -> Result<Option<Arc<Revision>>, Error> {
         (*self).apply(patch).await
     }
-    async fn lock(&mut self, ptr: JsonPointer, write: bool) {
-        (*self).lock(ptr, write).await
+    async fn lock(&mut self, ptr: JsonPointer, lock_type: LockType) {
+        (*self).lock(ptr, lock_type).await
     }
     async fn get<
         T: for<'de> Deserialize<'de>,
@@ -232,9 +233,9 @@ impl DbHandle for PatchDbHandle {
     async fn apply(&mut self, patch: DiffPatch) -> Result<Option<Arc<Revision>>, Error> {
         self.db.apply(patch, None, None).await
     }
-    async fn lock(&mut self, ptr: JsonPointer, write: bool) {
+    async fn lock(&mut self, ptr: JsonPointer, lock_type: LockType) {
         self.locks
-            .push(self.db.locker.lock(self.id.clone(), ptr, write).await);
+            .push(self.db.locker.lock(self.id.clone(), ptr, lock_type).await);
     }
     async fn get<
         T: for<'de> Deserialize<'de>,

@@ -10,7 +10,7 @@ use tokio::sync::broadcast::Receiver;
 use tokio::sync::{RwLock, RwLockReadGuard};
 
 use crate::handle::HandleId;
-use crate::locker::{Guard, Locker};
+use crate::locker::{Guard, LockType, Locker};
 use crate::patch::{DiffPatch, Revision};
 use crate::store::Store;
 use crate::{DbHandle, Error, PatchDbHandle};
@@ -166,9 +166,13 @@ impl<Parent: DbHandle + Send + Sync> DbHandle for Transaction<Parent> {
         self.updates.append(patch);
         Ok(None)
     }
-    async fn lock(&mut self, ptr: JsonPointer, write: bool) {
-        self.locks
-            .push(self.parent.locker().lock(self.id.clone(), ptr, write).await)
+    async fn lock(&mut self, ptr: JsonPointer, lock_type: LockType) {
+        self.locks.push(
+            self.parent
+                .locker()
+                .lock(self.id.clone(), ptr, lock_type)
+                .await,
+        )
     }
     async fn get<
         T: for<'de> Deserialize<'de>,
