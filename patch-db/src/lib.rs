@@ -20,7 +20,7 @@ mod test;
 pub use handle::{DbHandle, PatchDbHandle};
 pub use json_patch;
 pub use json_ptr;
-pub use locker::Locker;
+pub use locker::{LockType, Locker};
 pub use model::{
     BoxModel, HasModel, Map, MapModel, Model, ModelData, ModelDataMut, OptionModel, VecModel,
 };
