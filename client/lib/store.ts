@@ -152,8 +152,6 @@ export class Store<T extends { [key: string]: any }> {
 
       if (path.includes(revisionPath) || revisionPath.includes(path)) {
         const val = getValueByPointer(this.cache.data, path)
-        if (val === undefined) return kill(path)
-
         this.watchedNodes[path].next(val)
       }
     })
