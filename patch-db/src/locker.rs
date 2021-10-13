@@ -231,7 +231,7 @@ impl Node {
             }
             (LockType::DeepRead, true) => {
                 if let Some(idx) = self
-                    .writers
+                    .readers
                     .iter()
                     .enumerate()
                     .find(|(_, id)| id == &&lock_info.handle_id)
