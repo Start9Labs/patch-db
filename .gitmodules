@@ -1,9 +1,9 @@
 [submodule "cbor"]
 	path = cbor
-	url = git@github.com:dr-bonez/cbor.git
+	url = ../../dr-bonez/cbor.git
 [submodule "json-patch"]
 	path = json-patch
-	url = git@github.com:dr-bonez/json-patch.git
+	url = ../../dr-bonez/json-patch.git
 [submodule "json-ptr"]
 	path = json-ptr
-	url = git@github.com:dr-bonez/json-ptr.git
+	url = ../../dr-bonez/json-ptr.git
