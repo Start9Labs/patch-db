@@ -185,6 +185,9 @@ impl Node {
         req: Request,
         locks_on_lease: &mut Vec<oneshot::Receiver<LockInfo>>,
     ) -> Option<Request> {
+        if req.completion.is_closed() {
+            return None;
+        }
         match (
             req.lock_info.ty,
             req.lock_info.segments_handled == req.lock_info.ptr.len(),
