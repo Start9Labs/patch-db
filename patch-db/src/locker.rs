@@ -21,35 +21,70 @@ impl Locker {
             // instead we want it to block forever by adding a channel that will never recv
             let (_dummy_send, dummy_recv) = oneshot::channel();
             let mut locks_on_lease = vec![dummy_recv];
-            while let Some(action) = get_action(&mut new_requests, &mut locks_on_lease).await {
-                #[cfg(feature = "log")]
-                log::trace!("Locker Action: {:#?}", action);
+            let (_dummy_send, dummy_recv) = oneshot::channel();
+            let mut cancellations = vec![dummy_recv];
+            while let Some(action) =
+                get_action(&mut new_requests, &mut locks_on_lease, &mut cancellations).await
+            {
+                #[cfg(feature = "tracing")]
+                tracing::trace!("Locker Action: {:#?}", action);
                 match action {
-                    Action::HandleRequest(req) => trie.handle_request(req, &mut locks_on_lease),
+                    Action::HandleRequest(mut req) => {
+                        cancellations.extend(req.cancel.take());
+                        trie.handle_request(req, &mut locks_on_lease)
+                    }
                     Action::HandleRelease(lock_info) => {
                         trie.handle_release(lock_info, &mut locks_on_lease)
                     }
+                    Action::HandleCancel(lock_info) => {
+                        trie.handle_cancel(lock_info, &mut locks_on_lease)
+                    }
                 }
-                #[cfg(feature = "log")]
-                log::trace!("Locker Trie: {:#?}", trie);
+                #[cfg(feature = "tracing")]
+                tracing::trace!("Locker Trie: {:#?}", trie);
             }
         });
         Locker { sender }
     }
     pub async fn lock(&self, handle_id: HandleId, ptr: JsonPointer, lock_type: LockType) -> Guard {
+        struct CancelGuard {
+            lock_info: Option<LockInfo>,
+            channel: Option<oneshot::Sender<LockInfo>>,
+            recv: oneshot::Receiver<Guard>,
+        }
+        impl Drop for CancelGuard {
+            fn drop(&mut self) {
+                if let (Some(lock_info), Some(channel)) =
+                    (self.lock_info.take(), self.channel.take())
+                {
+                    self.recv.close();
+                    let _ = channel.send(lock_info);
+                }
+            }
+        }
+        let lock_info = LockInfo {
+            handle_id,
+            ptr,
+            ty: lock_type,
+            segments_handled: 0,
+        };
         let (send, recv) = oneshot::channel();
+        let (cancel_send, cancel_recv) = oneshot::channel();
+        let mut cancel_guard = CancelGuard {
+            lock_info: Some(lock_info.clone()),
+            channel: Some(cancel_send),
+            recv,
+        };
         self.sender
             .send(Request {
-                lock_info: LockInfo {
-                    handle_id,
-                    ptr,
-                    ty: lock_type,
-                    segments_handled: 0,
-                },
+                lock_info,
+                cancel: Some(cancel_recv),
                 completion: send,
             })
             .unwrap();
-        recv.await.unwrap()
+        let res = (&mut cancel_guard.recv).await.unwrap();
+        cancel_guard.channel.take();
+        res
     }
 }
 
@@ -62,13 +97,15 @@ struct RequestQueue {
 enum Action {
     HandleRequest(Request),
     HandleRelease(LockInfo),
+    HandleCancel(LockInfo),
 }
 async fn get_action(
     new_requests: &mut RequestQueue,
     locks_on_lease: &mut Vec<oneshot::Receiver<LockInfo>>,
+    cancellations: &mut Vec<oneshot::Receiver<LockInfo>>,
 ) -> Option<Action> {
     loop {
-        if new_requests.closed && locks_on_lease.is_empty() {
+        if new_requests.closed && locks_on_lease.len() == 1 && cancellations.len() == 1 {
             return None;
         }
         tokio::select! {
@@ -82,6 +119,12 @@ async fn get_action(
             (a, idx, _) = futures::future::select_all(locks_on_lease.iter_mut()) => {
                 locks_on_lease.swap_remove(idx);
                 return Some(Action::HandleRelease(a.unwrap()))
+            }
+            (a, idx, _) = futures::future::select_all(cancellations.iter_mut()) => {
+                cancellations.swap_remove(idx);
+                if let Ok(a) = a {
+                    return Some(Action::HandleCancel(a))
+                }
             }
         }
     }
@@ -121,6 +164,20 @@ impl Trie {
         if let Some(release) = release {
             self.child_mut(release.current_seg())
                 .handle_release(release, locks_on_lease)
+        }
+    }
+    fn handle_cancel(
+        &mut self,
+        lock_info: LockInfo,
+        locks_on_lease: &mut Vec<oneshot::Receiver<LockInfo>>,
+    ) {
+        let cancel = self.node.cancel(lock_info);
+        for req in std::mem::take(&mut self.node.reqs) {
+            self.handle_request(req, locks_on_lease);
+        }
+        if let Some(cancel) = cancel {
+            self.child_mut(cancel.current_seg())
+                .handle_cancel(cancel, locks_on_lease)
         }
     }
 }
@@ -273,9 +330,26 @@ impl Node {
             Some(lock_info)
         }
     }
+    fn cancel(&mut self, mut lock_info: LockInfo) -> Option<LockInfo> {
+        let mut idx = 0;
+        while idx < self.reqs.len() {
+            if self.reqs[idx].completion.is_closed() && self.reqs[idx].lock_info == lock_info {
+                self.reqs.swap_remove(idx);
+                return None;
+            } else {
+                idx += 1;
+            }
+        }
+        if lock_info.ptr.len() == lock_info.segments_handled {
+            None
+        } else {
+            lock_info.segments_handled += 1;
+            Some(lock_info)
+        }
+    }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 struct LockInfo {
     ptr: JsonPointer,
     segments_handled: usize,
@@ -313,6 +387,7 @@ impl Default for LockType {
 #[derive(Debug)]
 struct Request {
     lock_info: LockInfo,
+    cancel: Option<oneshot::Receiver<LockInfo>>,
     completion: oneshot::Sender<Guard>,
 }
 impl Request {
@@ -328,10 +403,13 @@ impl Request {
     fn complete(self, locks_on_lease: &mut Vec<oneshot::Receiver<LockInfo>>) {
         let (sender, receiver) = oneshot::channel();
         locks_on_lease.push(receiver);
-        let _ = self.completion.send(Guard {
+        if let Err(_) = self.completion.send(Guard {
             lock_info: self.lock_info.reset(),
             sender: Some(sender),
-        });
+        }) {
+            #[cfg(feature = "tracing")]
+            tracing::warn!("Completion sent to closed channel.")
+        }
     }
 }
 
@@ -342,10 +420,14 @@ pub struct Guard {
 }
 impl Drop for Guard {
     fn drop(&mut self) {
-        let _ = self
+        if let Err(_e) = self
             .sender
             .take()
             .unwrap()
-            .send(std::mem::take(&mut self.lock_info));
+            .send(std::mem::take(&mut self.lock_info))
+        {
+            #[cfg(feature = "tracing")]
+            tracing::warn!("Failed to release lock: {:?}", _e)
+        }
     }
 }

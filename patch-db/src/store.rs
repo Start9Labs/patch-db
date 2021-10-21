@@ -177,8 +177,8 @@ impl Store {
             return Ok(None);
         }
 
-        #[cfg(feature = "log")]
-        log::trace!("Attempting to apply patch: {:?}", patch);
+        #[cfg(feature = "tracing")]
+        tracing::trace!("Attempting to apply patch: {:?}", patch);
 
         self.check_cache_corrupted()?;
         let patch_bin = serde_cbor::to_vec(&*patch)?;
@@ -288,10 +288,13 @@ impl PatchDb {
     }
     pub fn handle(&self) -> PatchDbHandle {
         PatchDbHandle {
-            id: HandleId(
-                self.handle_id
+            id: HandleId {
+                id: self
+                    .handle_id
                     .fetch_add(1, std::sync::atomic::Ordering::SeqCst),
-            ),
+                #[cfg(feature = "trace")]
+                trace: Some(Arc::new(tracing_error::SpanTrace::capture())),
+            },
             db: self.clone(),
             locks: Vec::new(),
         }

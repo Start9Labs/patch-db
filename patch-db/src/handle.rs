@@ -5,14 +5,25 @@ use json_ptr::{JsonPointer, SegList};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeSet;
+use tokio::sync::RwLockWriteGuard;
 use tokio::sync::{broadcast::Receiver, RwLock, RwLockReadGuard};
 
 use crate::locker::LockType;
 use crate::{locker::Guard, Locker, PatchDb, Revision, Store, Transaction};
 use crate::{patch::DiffPatch, Error};
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct HandleId(pub(crate) u64);
+#[derive(Debug, Clone, Default)]
+pub struct HandleId {
+    pub(crate) id: u64,
+    #[cfg(feature = "trace")]
+    pub(crate) trace: Option<Arc<tracing_error::SpanTrace>>,
+}
+impl PartialEq for HandleId {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+impl Eq for HandleId {}
 
 #[async_trait]
 pub trait DbHandle: Send + Sync {
@@ -42,7 +53,11 @@ pub trait DbHandle: Send + Sync {
         ptr: &JsonPointer<S, V>,
         value: &Value,
     ) -> Result<Option<Arc<Revision>>, Error>;
-    async fn apply(&mut self, patch: DiffPatch) -> Result<Option<Arc<Revision>>, Error>;
+    async fn apply(
+        &mut self,
+        patch: DiffPatch,
+        store_write_lock: Option<RwLockWriteGuard<'_, Store>>,
+    ) -> Result<Option<Arc<Revision>>, Error>;
     async fn lock(&mut self, ptr: JsonPointer, lock_type: LockType) -> ();
     async fn get<
         T: for<'de> Deserialize<'de>,
@@ -122,8 +137,12 @@ impl<Handle: DbHandle + ?Sized> DbHandle for &mut Handle {
     ) -> Result<Option<Arc<Revision>>, Error> {
         (*self).put_value(ptr, value).await
     }
-    async fn apply(&mut self, patch: DiffPatch) -> Result<Option<Arc<Revision>>, Error> {
-        (*self).apply(patch).await
+    async fn apply(
+        &mut self,
+        patch: DiffPatch,
+        store_write_lock: Option<RwLockWriteGuard<'_, Store>>,
+    ) -> Result<Option<Arc<Revision>>, Error> {
+        (*self).apply(patch, store_write_lock).await
     }
     async fn lock(&mut self, ptr: JsonPointer, lock_type: LockType) {
         (*self).lock(ptr, lock_type).await
@@ -230,8 +249,12 @@ impl DbHandle for PatchDbHandle {
     ) -> Result<Option<Arc<Revision>>, Error> {
         self.db.put(ptr, value, None).await
     }
-    async fn apply(&mut self, patch: DiffPatch) -> Result<Option<Arc<Revision>>, Error> {
-        self.db.apply(patch, None, None).await
+    async fn apply(
+        &mut self,
+        patch: DiffPatch,
+        store_write_lock: Option<RwLockWriteGuard<'_, Store>>,
+    ) -> Result<Option<Arc<Revision>>, Error> {
+        self.db.apply(patch, None, store_write_lock).await
     }
     async fn lock(&mut self, ptr: JsonPointer, lock_type: LockType) {
         self.locks
