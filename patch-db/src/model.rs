@@ -33,13 +33,14 @@ pub struct ModelDataMut<T: Serialize + for<'de> Deserialize<'de>> {
     ptr: JsonPointer,
 }
 impl<T: Serialize + for<'de> Deserialize<'de>> ModelDataMut<T> {
-    pub async fn save<Db: DbHandle>(self, db: &mut Db) -> Result<(), Error> {
+    pub async fn save<Db: DbHandle>(&mut self, db: &mut Db) -> Result<(), Error> {
         let current = serde_json::to_value(&self.current)?;
         let mut diff = crate::patch::diff(&self.original, &current);
         let target = db.get_value(&self.ptr, None).await?;
         diff.rebase(&crate::patch::diff(&self.original, &target));
         diff.prepend(&self.ptr);
-        db.apply(diff).await?;
+        db.apply(diff, None).await?;
+        self.original = current;
         Ok(())
     }
 }
@@ -501,11 +502,12 @@ where
     pub async fn remove<Db: DbHandle>(&self, db: &mut Db, key: &T::Key) -> Result<(), Error> {
         db.lock(self.as_ref().clone(), LockType::Write).await;
         if db.exists(self.clone().idx(key).as_ref(), None).await? {
-            db.apply(DiffPatch(Patch(vec![PatchOperation::Remove(
-                RemoveOperation {
+            db.apply(
+                DiffPatch(Patch(vec![PatchOperation::Remove(RemoveOperation {
                     path: self.as_ref().clone().join_end(key.as_ref()),
-                },
-            )])))
+                })])),
+                None,
+            )
             .await?;
         }
         Ok(())

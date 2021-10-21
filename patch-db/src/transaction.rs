@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::broadcast::error::TryRecvError;
 use tokio::sync::broadcast::Receiver;
-use tokio::sync::{RwLock, RwLockReadGuard};
+use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::handle::HandleId;
 use crate::locker::{Guard, LockType, Locker};
@@ -51,10 +51,9 @@ impl Transaction<&mut PatchDbHandle> {
 impl<Parent: DbHandle + Send + Sync> Transaction<Parent> {
     pub async fn save(mut self) -> Result<(), Error> {
         let store_lock = self.parent.store();
-        let store = store_lock.read().await;
+        let store = store_lock.write().await;
         self.rebase()?;
-        self.parent.apply(self.updates).await?;
-        drop(store);
+        self.parent.apply(self.updates, Some(store)).await?;
         Ok(())
     }
 }
@@ -148,8 +147,8 @@ impl<Parent: DbHandle + Send + Sync> DbHandle for Transaction<Parent> {
         };
         let path_updates = self.updates.for_path(ptr);
         if !(path_updates.0).0.is_empty() {
-            #[cfg(feature = "log")]
-            log::trace!("applying patch {:?} at path {}", path_updates, ptr);
+            #[cfg(feature = "tracing")]
+            tracing::trace!("Applying patch {:?} at path {}", path_updates, ptr);
 
             json_patch::patch(&mut data, &*path_updates)?;
         }
@@ -195,7 +194,11 @@ impl<Parent: DbHandle + Send + Sync> DbHandle for Transaction<Parent> {
     ) -> Result<Option<Arc<Revision>>, Error> {
         self.put_value(ptr, &serde_json::to_value(value)?).await
     }
-    async fn apply(&mut self, patch: DiffPatch) -> Result<Option<Arc<Revision>>, Error> {
+    async fn apply(
+        &mut self,
+        patch: DiffPatch,
+        _store_write_lock: Option<RwLockWriteGuard<'_, Store>>,
+    ) -> Result<Option<Arc<Revision>>, Error> {
         self.updates.append(patch);
         Ok(None)
     }
