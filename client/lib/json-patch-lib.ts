@@ -1,3 +1,5 @@
+import { PatchOp } from './types'
+
 export interface Validator<T> {
   (operation: Operation, index: number, doc: T, existingPathFragment: string): void
 }
@@ -7,16 +9,16 @@ export interface BaseOperation {
 }
 
 export interface AddOperation<T> extends BaseOperation {
-  op: 'add'
+  op: PatchOp.ADD
   value: T
 }
 
 export interface RemoveOperation extends BaseOperation {
-  op: 'remove'
+  op: PatchOp.REMOVE
 }
 
 export interface ReplaceOperation<T> extends BaseOperation {
-  op: 'replace'
+  op: PatchOp.REPLACE
   value: T
 }
 
@@ -55,13 +57,13 @@ export function applyOperation (doc: Doc, op: Operation): Operation | null {
       node[key] = op.value
       if (curVal) {
         undo = {
-          op: 'replace',
+          op: PatchOp.REPLACE,
           path: op.path,
           value: curVal,
         }
       } else {
         undo = {
-          op: 'remove',
+          op: PatchOp.REMOVE,
           path: op.path,
         }
       }
@@ -69,7 +71,7 @@ export function applyOperation (doc: Doc, op: Operation): Operation | null {
       delete node[key]
       if (curVal) {
         undo = {
-          op: 'add',
+          op: PatchOp.ADD,
           path: op.path,
           value: curVal,
         }
