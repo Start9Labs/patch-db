@@ -71,7 +71,7 @@ where
 
     pub async fn get<Db: DbHandle>(&self, db: &mut Db, lock: bool) -> Result<ModelData<T>, Error> {
         if lock {
-            self.lock(db, LockType::DeepRead).await;
+            self.lock(db, LockType::Read).await;
         }
         Ok(ModelData(db.get(&self.ptr).await?))
     }
@@ -238,7 +238,7 @@ impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> OptionModel<T> {
         lock: bool,
     ) -> Result<ModelData<Option<T>>, Error> {
         if lock {
-            self.lock(db, LockType::DeepRead).await;
+            self.lock(db, LockType::Read).await;
         }
         Ok(ModelData(db.get(self.0.as_ref()).await?))
     }
@@ -259,8 +259,7 @@ impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> OptionModel<T> {
 
     pub async fn exists<Db: DbHandle>(&self, db: &mut Db, lock: bool) -> Result<bool, Error> {
         if lock {
-            db.lock(self.0.as_ref().clone(), LockType::ShallowRead)
-                .await;
+            db.lock(self.0.as_ref().clone(), LockType::Exist).await;
         }
         Ok(db.exists(&self.as_ref(), None).await?)
     }
@@ -491,7 +490,7 @@ where
         lock: bool,
     ) -> Result<BTreeSet<T::Key>, Error> {
         if lock {
-            db.lock(self.as_ref().clone(), LockType::ShallowRead).await;
+            db.lock(self.as_ref().clone(), LockType::Exist).await;
         }
         let set = db.keys(self.as_ref(), None).await?;
         Ok(set
