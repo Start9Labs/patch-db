@@ -24,6 +24,16 @@ impl PartialEq for HandleId {
     }
 }
 impl Eq for HandleId {}
+impl PartialOrd for HandleId {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.id.partial_cmp(&other.id)
+    }
+}
+impl Ord for HandleId {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.id.cmp(&other.id)
+    }
+}
 
 #[async_trait]
 pub trait DbHandle: Send + Sync {
