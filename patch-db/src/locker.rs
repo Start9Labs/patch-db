@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, VecDeque};
 
-use im::{ordset, OrdSet};
+use imbl::{ordset, OrdSet};
 use json_ptr::{JsonPointer, SegList};
 use tokio::sync::{mpsc, oneshot};
 
@@ -73,7 +73,9 @@ impl Locker {
                             &mut locks_on_lease,
                             &mut request_queue,
                         );
-                        hot_seat.map_or((), |a| request_queue.push_front(a));
+                        if let Some(hot_seat) = hot_seat {
+                            request_queue.push_front(hot_seat);
+                        }
                     }
                     Action::HandleRelease(lock_info) => {
                         // release actual lock
@@ -106,7 +108,9 @@ impl Locker {
                                     &mut request_queue,
                                 )
                             }
-                            hot_seat.map_or((), |a| request_queue.push_front(a));
+                            if let Some(hot_seat) = hot_seat {
+                                request_queue.push_front(hot_seat);
+                            }
                         }
                     }
                     Action::HandleCancel(lock_info) => {
