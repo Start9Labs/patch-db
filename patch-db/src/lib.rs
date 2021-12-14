@@ -15,6 +15,8 @@ mod store;
 mod transaction;
 
 #[cfg(test)]
+mod proptest;
+#[cfg(test)]
 mod test;
 
 pub use handle::{DbHandle, PatchDbHandle};
