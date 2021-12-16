@@ -209,7 +209,12 @@ impl Locker {
         });
         Locker { sender }
     }
-    pub async fn lock(&self, handle_id: HandleId, ptr: JsonPointer, lock_type: LockType) -> Guard {
+    pub async fn lock(
+        &self,
+        handle_id: HandleId,
+        ptr: JsonPointer,
+        lock_type: LockType,
+    ) -> Result<Guard, LockError> {
         struct CancelGuard {
             lock_info: Option<LockInfo>,
             channel: Option<oneshot::Sender<LockInfo>>,
@@ -246,7 +251,7 @@ impl Locker {
             .unwrap();
         let res = (&mut cancel_guard.recv).await.unwrap();
         cancel_guard.channel.take();
-        res
+        Ok(res)
     }
 }
 
@@ -908,6 +913,31 @@ impl std::fmt::Display for LockType {
         };
         write!(f, "{}", show)
     }
+}
+
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum LockError {
+    #[error("Lock Taxonomy Escalation: Session = {session:?}, First = {first}, Second = {second}")]
+    LockTaxonomyEscalation {
+        session: HandleId,
+        first: JsonPointer,
+        second: JsonPointer,
+    },
+    #[error("Lock Type Escalation: Session = {session:?}, Pointer = {ptr}, First = {first}, Second = {second}")]
+    LockTypeEscalation {
+        session: HandleId,
+        ptr: JsonPointer,
+        first: LockType,
+        second: LockType,
+    },
+    #[error(
+        "Non-Canonical Lock Ordering: Session = {session:?}, First = {first}, Second = {second}"
+    )]
+    NonCanonicalOrdering {
+        session: HandleId,
+        first: JsonPointer,
+        second: JsonPointer,
+    },
 }
 
 #[derive(Debug)]
