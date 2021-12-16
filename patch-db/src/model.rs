@@ -9,7 +9,7 @@ use json_ptr::JsonPointer;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::locker::LockType;
+use crate::locker::{LockError, LockType};
 use crate::{DbHandle, DiffPatch, Error, Revision};
 
 #[derive(Debug)]
@@ -65,19 +65,23 @@ impl<T> Model<T>
 where
     T: Serialize + for<'de> Deserialize<'de>,
 {
-    pub async fn lock<Db: DbHandle>(&self, db: &mut Db, lock_type: LockType) {
+    pub async fn lock<Db: DbHandle>(
+        &self,
+        db: &mut Db,
+        lock_type: LockType,
+    ) -> Result<(), LockError> {
         db.lock(self.ptr.clone(), lock_type).await
     }
 
     pub async fn get<Db: DbHandle>(&self, db: &mut Db, lock: bool) -> Result<ModelData<T>, Error> {
         if lock {
-            self.lock(db, LockType::Read).await;
+            self.lock(db, LockType::Read).await?;
         }
         Ok(ModelData(db.get(&self.ptr).await?))
     }
 
     pub async fn get_mut<Db: DbHandle>(&self, db: &mut Db) -> Result<ModelDataMut<T>, Error> {
-        self.lock(db, LockType::Write).await;
+        self.lock(db, LockType::Write).await?;
         let original = db.get_value(&self.ptr, None).await?;
         let current = serde_json::from_value(original.clone())?;
         Ok(ModelDataMut {
@@ -105,7 +109,7 @@ where
         db: &mut Db,
         value: &T,
     ) -> Result<Option<Arc<Revision>>, Error> {
-        self.lock(db, LockType::Write).await;
+        self.lock(db, LockType::Write).await?;
         db.put(&self.ptr, value).await
     }
 }
@@ -228,7 +232,11 @@ impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> HasModel for Box<T> {
 #[derive(Debug)]
 pub struct OptionModel<T: HasModel + Serialize + for<'de> Deserialize<'de>>(T::Model);
 impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> OptionModel<T> {
-    pub async fn lock<Db: DbHandle>(&self, db: &mut Db, lock_type: LockType) {
+    pub async fn lock<Db: DbHandle>(
+        &self,
+        db: &mut Db,
+        lock_type: LockType,
+    ) -> Result<(), LockError> {
         db.lock(self.0.as_ref().clone(), lock_type).await
     }
 
@@ -238,7 +246,7 @@ impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> OptionModel<T> {
         lock: bool,
     ) -> Result<ModelData<Option<T>>, Error> {
         if lock {
-            self.lock(db, LockType::Read).await;
+            self.lock(db, LockType::Read).await?;
         }
         Ok(ModelData(db.get(self.0.as_ref()).await?))
     }
@@ -247,7 +255,7 @@ impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> OptionModel<T> {
         &self,
         db: &mut Db,
     ) -> Result<ModelDataMut<Option<T>>, Error> {
-        self.lock(db, LockType::Write).await;
+        self.lock(db, LockType::Write).await?;
         let original = db.get_value(self.0.as_ref(), None).await?;
         let current = serde_json::from_value(original.clone())?;
         Ok(ModelDataMut {
@@ -259,7 +267,7 @@ impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> OptionModel<T> {
 
     pub async fn exists<Db: DbHandle>(&self, db: &mut Db, lock: bool) -> Result<bool, Error> {
         if lock {
-            db.lock(self.0.as_ref().clone(), LockType::Exist).await;
+            db.lock(self.0.as_ref().clone(), LockType::Exist).await?;
         }
         Ok(db.exists(&self.as_ref(), None).await?)
     }
@@ -285,7 +293,7 @@ impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> OptionModel<T> {
     }
 
     pub async fn delete<Db: DbHandle>(&self, db: &mut Db) -> Result<Option<Arc<Revision>>, Error> {
-        db.lock(self.as_ref().clone(), LockType::Write).await;
+        db.lock(self.as_ref().clone(), LockType::Write).await?;
         db.put(self.as_ref(), &Value::Null).await
     }
 }
@@ -319,7 +327,7 @@ where
         db: &mut Db,
         value: &T,
     ) -> Result<Option<Arc<Revision>>, Error> {
-        db.lock(self.as_ref().clone(), LockType::Write).await;
+        db.lock(self.as_ref().clone(), LockType::Write).await?;
         db.put(self.as_ref(), value).await
     }
 }
@@ -490,7 +498,7 @@ where
         lock: bool,
     ) -> Result<BTreeSet<T::Key>, Error> {
         if lock {
-            db.lock(self.as_ref().clone(), LockType::Exist).await;
+            db.lock(self.as_ref().clone(), LockType::Exist).await?;
         }
         let set = db.keys(self.as_ref(), None).await?;
         Ok(set
@@ -499,7 +507,7 @@ where
             .collect::<Result<_, _>>()?)
     }
     pub async fn remove<Db: DbHandle>(&self, db: &mut Db, key: &T::Key) -> Result<(), Error> {
-        db.lock(self.as_ref().clone(), LockType::Write).await;
+        db.lock(self.as_ref().clone(), LockType::Write).await?;
         if db.exists(self.clone().idx(key).as_ref(), None).await? {
             db.apply(
                 DiffPatch(Patch(vec![PatchOperation::Remove(RemoveOperation {
