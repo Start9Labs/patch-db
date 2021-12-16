@@ -1,16 +1,16 @@
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use json_ptr::{JsonPointer, SegList};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeSet;
-use tokio::sync::RwLockWriteGuard;
-use tokio::sync::{broadcast::Receiver, RwLock, RwLockReadGuard};
+use tokio::sync::broadcast::Receiver;
+use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-use crate::locker::LockType;
-use crate::{locker::Guard, Locker, PatchDb, Revision, Store, Transaction};
-use crate::{patch::DiffPatch, Error};
+use crate::locker::{Guard, LockError, LockType};
+use crate::patch::DiffPatch;
+use crate::{Error, Locker, PatchDb, Revision, Store, Transaction};
 
 #[derive(Debug, Clone, Default)]
 pub struct HandleId {
@@ -68,7 +68,7 @@ pub trait DbHandle: Send + Sync {
         patch: DiffPatch,
         store_write_lock: Option<RwLockWriteGuard<'_, Store>>,
     ) -> Result<Option<Arc<Revision>>, Error>;
-    async fn lock(&mut self, ptr: JsonPointer, lock_type: LockType) -> ();
+    async fn lock(&mut self, ptr: JsonPointer, lock_type: LockType) -> Result<(), LockError>;
     async fn get<
         T: for<'de> Deserialize<'de>,
         S: AsRef<str> + Send + Sync,
@@ -154,7 +154,7 @@ impl<Handle: DbHandle + ?Sized> DbHandle for &mut Handle {
     ) -> Result<Option<Arc<Revision>>, Error> {
         (*self).apply(patch, store_write_lock).await
     }
-    async fn lock(&mut self, ptr: JsonPointer, lock_type: LockType) {
+    async fn lock(&mut self, ptr: JsonPointer, lock_type: LockType) -> Result<(), LockError> {
         (*self).lock(ptr, lock_type).await
     }
     async fn get<
@@ -266,9 +266,10 @@ impl DbHandle for PatchDbHandle {
     ) -> Result<Option<Arc<Revision>>, Error> {
         self.db.apply(patch, None, store_write_lock).await
     }
-    async fn lock(&mut self, ptr: JsonPointer, lock_type: LockType) {
-        self.locks
-            .push(self.db.locker.lock(self.id.clone(), ptr, lock_type).await);
+    async fn lock(&mut self, ptr: JsonPointer, lock_type: LockType) -> Result<(), LockError> {
+        Ok(self
+            .locks
+            .push(self.db.locker.lock(self.id.clone(), ptr, lock_type).await?))
     }
     async fn get<
         T: for<'de> Deserialize<'de>,
