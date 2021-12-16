@@ -2,6 +2,7 @@ use std::io::Error as IOError;
 use std::sync::Arc;
 
 use json_ptr::JsonPointer;
+use locker::LockError;
 use thiserror::Error;
 use tokio::sync::broadcast::error::TryRecvError;
 
@@ -20,8 +21,6 @@ mod proptest;
 mod test;
 
 pub use handle::{DbHandle, PatchDbHandle};
-pub use json_patch;
-pub use json_ptr;
 pub use locker::{LockType, Locker};
 pub use model::{
     BoxModel, HasModel, Map, MapModel, Model, ModelData, ModelDataMut, OptionModel, VecModel,
@@ -30,6 +29,7 @@ pub use patch::{DiffPatch, Dump, Revision};
 pub use patch_db_macro::HasModel;
 pub use store::{PatchDb, Store};
 pub use transaction::Transaction;
+pub use {json_patch, json_ptr};
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -53,4 +53,6 @@ pub enum Error {
     Subscriber(#[from] TryRecvError),
     #[error("Node Does Not Exist: {0}")]
     NodeDoesNotExist(JsonPointer),
+    #[error("Invalid Lock Request: {0}")]
+    LockError(#[from] LockError),
 }
