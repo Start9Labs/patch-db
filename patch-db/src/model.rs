@@ -9,7 +9,7 @@ use json_ptr::JsonPointer;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::locker::{LockError, LockType};
+use crate::locker::LockType;
 use crate::{DbHandle, DiffPatch, Error, Revision};
 
 #[derive(Debug)]
@@ -65,12 +65,8 @@ impl<T> Model<T>
 where
     T: Serialize + for<'de> Deserialize<'de>,
 {
-    pub async fn lock<Db: DbHandle>(
-        &self,
-        db: &mut Db,
-        lock_type: LockType,
-    ) -> Result<(), LockError> {
-        db.lock(self.ptr.clone(), lock_type).await
+    pub async fn lock<Db: DbHandle>(&self, db: &mut Db, lock_type: LockType) -> Result<(), Error> {
+        Ok(db.lock(self.ptr.clone(), lock_type).await?)
     }
 
     pub async fn get<Db: DbHandle>(&self, db: &mut Db, lock: bool) -> Result<ModelData<T>, Error> {
@@ -232,12 +228,8 @@ impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> HasModel for Box<T> {
 #[derive(Debug)]
 pub struct OptionModel<T: HasModel + Serialize + for<'de> Deserialize<'de>>(T::Model);
 impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> OptionModel<T> {
-    pub async fn lock<Db: DbHandle>(
-        &self,
-        db: &mut Db,
-        lock_type: LockType,
-    ) -> Result<(), LockError> {
-        db.lock(self.0.as_ref().clone(), lock_type).await
+    pub async fn lock<Db: DbHandle>(&self, db: &mut Db, lock_type: LockType) -> Result<(), Error> {
+        Ok(db.lock(self.0.as_ref().clone(), lock_type).await?)
     }
 
     pub async fn get<Db: DbHandle>(
