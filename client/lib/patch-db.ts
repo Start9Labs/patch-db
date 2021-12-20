@@ -14,7 +14,6 @@ export class PatchDB<T> {
   private sourcesSub = this.sources$.subscribe(sources => {
     this.updatesSub = merge(...sources.map(s => s.watch$(this.store))).subscribe({
       next: (res) => {
-        console.log('PatchDB -> subscribedChanges -> JCWM:', { res })
         if ('result' in res) {
           this.store.update(res.result)
           this.cache$.next(this.store.cache)
