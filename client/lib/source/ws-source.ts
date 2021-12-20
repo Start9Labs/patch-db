@@ -1,5 +1,4 @@
 import { Observable } from 'rxjs'
-import { map } from 'rxjs/operators'
 import { webSocket, WebSocketSubject, WebSocketSubjectConfig } from 'rxjs/webSocket'
 import { Update } from '../types'
 import { Source } from './source'
@@ -11,7 +10,7 @@ export class WebsocketSource<T> implements Source<T> {
     private readonly url: string,
   ) { }
 
-  watch$ (): Observable<Update<T>> {
+  watch$ (): Observable<RPCResponse<Update<T>>> {
     const fullConfig: WebSocketSubjectConfig<RPCResponse<Update<T>>> = {
       url: this.url,
       openObserver: {
@@ -21,12 +20,7 @@ export class WebsocketSource<T> implements Source<T> {
       },
     }
     this.websocket$ = webSocket(fullConfig)
-    return this.websocket$.pipe(
-      map(res => {
-        if (isRpcSuccess(res)) return res.result
-        if (isRpcError(res)) throw new RpcError(res.error)
-      }),
-    ) as Observable<Update<T>>
+    return this.websocket$
   }
 }
 
@@ -47,7 +41,6 @@ export interface RPCError extends RPCBase {
     }
   }
 }
-
 export type RPCResponse<T> = RPCSuccess<T> | RPCError
 
 function isRpcError<Error, Result> (arg: { error: Error } | { result: Result}): arg is { error: Error } {
