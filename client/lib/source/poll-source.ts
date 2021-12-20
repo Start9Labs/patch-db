@@ -1,8 +1,9 @@
 import { BehaviorSubject, concat, from, Observable, of, Subject } from 'rxjs'
-import { concatMap, delay, skip, switchMap, take, tap } from 'rxjs/operators'
+import { concatMap, delay, map, skip, switchMap, take, tap } from 'rxjs/operators'
 import { Store } from '../store'
 import { Http, Update } from '../types'
 import { Source } from './source'
+import { RPCResponse } from './ws-source'
 
 export type PollConfig = {
   cooldown: number
@@ -15,7 +16,7 @@ export class PollSource<T> implements Source<T> {
     private readonly http: Http<T>,
   ) { }
 
-  watch$ (store: Store<T>): Observable<Update<T>> {
+  watch$ (store: Store<T>): Observable<RPCResponse<Update<T>>> {
     const polling$ = new BehaviorSubject('')
 
     const updates$ = of({ })
@@ -42,6 +43,8 @@ export class PollSource<T> implements Source<T> {
           return of(res) // takes Dump<T> and converts it into Observable<Dump<T>>
         }
       }),
+      map(result => ({ result,
+        jsonrpc: '2.0' })),
     )
   }
 }
