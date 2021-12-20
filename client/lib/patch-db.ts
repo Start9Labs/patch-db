@@ -32,9 +32,7 @@ export class PatchDB<T> {
     private readonly sources$: Observable<Source<T>[]>,
     private readonly http: Http<T>,
     private readonly initialCache: DBCache<T>,
-  ) {
-    console.log('STARTING PATCH 1')
-  }
+  ) { }
 
   clean () {
     this.sourcesSub.unsubscribe()
