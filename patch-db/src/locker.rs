@@ -420,14 +420,14 @@ impl LockOrderEnforcer {
         match self.locks_held.remove_with_key(&req.handle_id) {
             None => {
                 #[cfg(feature = "tracing")]
-                tracing::warn!("Invalid removal from session manager: {}", req);
+                tracing::warn!("Invalid removal from session manager: {:?}", req);
             }
             Some((hdl, mut locks)) => {
                 let k = (req.ptr.clone(), req.ty);
                 match locks.remove_with_key(&k) {
                     None => {
                         #[cfg(feature = "tracing")]
-                        tracing::warn!("Invalid removal from session manager: {}", req);
+                        tracing::warn!("Invalid removal from session manager: {:?}", req);
                     }
                     Some((k, n)) => {
                         if n - 1 > 0 {
