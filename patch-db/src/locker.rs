@@ -325,6 +325,9 @@ impl LockOrderEnforcer {
         //
         // Sequences
         // LockRequest >> LockRequest
+        #[cfg(not(feature = "unstable"))]
+        return Ok(());
+        #[cfg(feature = "unstable")]
         match self.locks_held.get(&req.handle_id) {
             None => Ok(()),
             Some(m) => {
