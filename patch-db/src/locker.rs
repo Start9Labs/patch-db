@@ -315,6 +315,16 @@ impl LockOrderEnforcer {
     }
     // locks must be acquired in lexicographic order for the pointer, and reverse order for type
     fn validate(&self, req: &LockInfo) -> Result<(), LockError> {
+        // the following notation is used to denote an example sequence that can cause deadlocks
+        //
+        // Individual Lock Requests
+        // 1W/A/B
+        // |||> Node whose lock is being acquired: /A/B (strings prefixed by slashes, indicating descent path)
+        // ||> Type of Lock: W (E/R/W)
+        // |> Session Number: 1 (any natural number)
+        //
+        // Sequences
+        // LockRequest >> LockRequest
         match self.locks_held.get(&req.handle_id) {
             None => Ok(()),
             Some(m) => {
@@ -329,35 +339,52 @@ impl LockOrderEnforcer {
                         return Ok(());
                     }
                 }
-                let err = m.keys().find_map(|(ptr, ty)| {
-                    match ptr.cmp(&req.ptr) {
-                        std::cmp::Ordering::Less => None, // this is OK
-                        std::cmp::Ordering::Equal => {
-                            if req.ty > *ty {
-                                Some(LockError::LockTypeEscalation {
-                                    session: req.handle_id.clone(),
-                                    ptr: ptr.clone(),
-                                    first: *ty,
-                                    second: req.ty,
-                                })
-                            } else {
-                                None
-                            }
-                        }
-                        std::cmp::Ordering::Greater => Some(if ptr.starts_with(&req.ptr) {
-                            LockError::LockTaxonomyEscalation {
+                let err = m.keys().find_map(|(ptr, ty)| match ptr.cmp(&req.ptr) {
+                    std::cmp::Ordering::Less => {
+                        if req.ptr.starts_with(ptr)
+                            && req.ty == LockType::Write
+                            && *ty == LockType::Read
+                        {
+                            // 1R/A >> 2R/A >> 1W/A/A >> 2W/A/B
+                            Some(LockError::LockTypeEscalationImplicit {
                                 session: req.handle_id.clone(),
-                                first: ptr.clone(),
-                                second: req.ptr.clone(),
-                            }
+                                first_ptr: ptr.clone(),
+                                first_type: *ty,
+                                second_ptr: req.ptr.clone(),
+                                second_type: req.ty,
+                            })
                         } else {
-                            LockError::NonCanonicalOrdering {
-                                session: req.handle_id.clone(),
-                                first: ptr.clone(),
-                                second: req.ptr.clone(),
-                            }
-                        }),
+                            None
+                        }
                     }
+                    std::cmp::Ordering::Equal => {
+                        if req.ty > *ty {
+                            // 1R/A >> 2R/A >> 1W/A >> 1W/A
+                            Some(LockError::LockTypeEscalation {
+                                session: req.handle_id.clone(),
+                                ptr: ptr.clone(),
+                                first: *ty,
+                                second: req.ty,
+                            })
+                        } else {
+                            None
+                        }
+                    }
+                    std::cmp::Ordering::Greater => Some(if ptr.starts_with(&req.ptr) {
+                        // 1W/A/A >> 2W/A/B >> 1R/A >> 2R/A
+                        LockError::LockTaxonomyEscalation {
+                            session: req.handle_id.clone(),
+                            first: ptr.clone(),
+                            second: req.ptr.clone(),
+                        }
+                    } else {
+                        // 1W/A >> 2W/B >> 1W/B >> 2W/A
+                        LockError::NonCanonicalOrdering {
+                            session: req.handle_id.clone(),
+                            first: ptr.clone(),
+                            second: req.ptr.clone(),
+                        }
+                    }),
                 });
                 err.map_or(Ok(()), Err)
             }
@@ -1063,6 +1090,14 @@ pub enum LockError {
         ptr: JsonPointer,
         first: LockType,
         second: LockType,
+    },
+    #[error("Lock Type Escalation Implicit: Session = {session:?}, First = {first_ptr}:{first_type}, Second = {second_ptr}:{second_type}")]
+    LockTypeEscalationImplicit {
+        session: HandleId,
+        first_ptr: JsonPointer,
+        first_type: LockType,
+        second_ptr: JsonPointer,
+        second_type: LockType,
     },
     #[error(
         "Non-Canonical Lock Ordering: Session = {session:?}, First = {first}, Second = {second}"
