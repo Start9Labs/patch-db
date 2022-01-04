@@ -1,10 +1,11 @@
 use imbl::{ordmap, OrdMap};
 use json_ptr::JsonPointer;
+#[cfg(feature = "tracing")]
 use tracing::warn;
 
-use crate::{handle::HandleId, LockType};
-
 use super::{LockError, LockInfo};
+use crate::handle::HandleId;
+use crate::LockType;
 
 pub(super) struct LockOrderEnforcer {
     locks_held: OrdMap<HandleId, OrdMap<(JsonPointer, LockType), usize>>,

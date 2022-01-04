@@ -1,17 +1,19 @@
 use std::collections::VecDeque;
 
-use crate::{
-    handle::HandleId,
-    locker::{
-        log_utils::{display_session_set, fmt_acquired, fmt_cancelled, fmt_deferred, fmt_released},
-        LockSet,
-    },
-};
 use imbl::{ordmap, ordset, OrdMap, OrdSet};
 use tokio::sync::oneshot;
+#[cfg(feature = "tracing")]
 use tracing::{debug, error, info, warn};
 
-use super::{order_enforcer::LockOrderEnforcer, trie::LockTrie, LockError, LockInfo, Request};
+use super::order_enforcer::LockOrderEnforcer;
+use super::trie::LockTrie;
+use super::{LockError, LockInfo, Request};
+use crate::handle::HandleId;
+#[cfg(feature = "tracing")]
+use crate::locker::log_utils::{
+    display_session_set, fmt_acquired, fmt_cancelled, fmt_deferred, fmt_released,
+};
+use crate::locker::LockSet;
 
 // solely responsible for managing the bookkeeping requirements of requests
 pub(super) struct LockBookkeeper {
@@ -187,7 +189,8 @@ fn process_new_req(
 fn kill_deadlocked(request_queue: &mut VecDeque<(Request, OrdSet<HandleId>)>, trie: &LockTrie) {
     // TODO optimize this, it is unlikely that we are anywhere close to as efficient as we can be here.
     let deadlocked_reqs = deadlock_scan(request_queue);
-    if !deadlocked_reqs.is_empty() {
+    let last = request_queue.back().unwrap();
+    if !deadlocked_reqs.is_empty() && deadlocked_reqs.iter().any(|r| std::ptr::eq(*r, &last.0)) {
         let locks_waiting = LockSet(
             deadlocked_reqs
                 .iter()
@@ -200,20 +203,24 @@ fn kill_deadlocked(request_queue: &mut VecDeque<(Request, OrdSet<HandleId>)>, tr
             locks_waiting,
             locks_held: LockSet(trie.subtree_lock_info()),
         };
-        let mut indices_to_remove = Vec::with_capacity(deadlocked_reqs.len());
-        for (i, (req, _)) in request_queue.iter().enumerate() {
-            if deadlocked_reqs.iter().any(|r| std::ptr::eq(*r, req)) {
-                indices_to_remove.push(i)
-            }
-        }
-        let old = std::mem::take(request_queue);
-        for (i, (r, s)) in old.into_iter().enumerate() {
-            if indices_to_remove.contains(&i) {
-                r.reject(err.clone())
-            } else {
-                request_queue.push_back((r, s))
-            }
-        }
+
+        request_queue.pop_back().unwrap().0.reject(err);
+
+        // This commented logic is for if we want to kill the whole cycle, rather than the most recent addition
+        // let mut indices_to_remove = Vec::with_capacity(deadlocked_reqs.len());
+        // for (i, (req, _)) in request_queue.iter().enumerate() {
+        //     if deadlocked_reqs.iter().any(|r| std::ptr::eq(*r, req)) {
+        //         indices_to_remove.push(i)
+        //     }
+        // }
+        // let old = std::mem::take(request_queue);
+        // for (i, (r, s)) in old.into_iter().enumerate() {
+        //     if indices_to_remove.contains(&i) {
+        //         r.reject(err.clone())
+        //     } else {
+        //         request_queue.push_back((r, s))
+        //     }
+        // }
     }
 }
 
@@ -239,9 +246,9 @@ pub(super) fn deadlock_scan<'a>(
             },
         );
     for (root, wait_set) in wait_map.iter() {
-        let cycle = wait_set
-            .iter()
-            .find_map(|start| Some(path_to(&wait_map, root, start)).filter(|s| s.is_empty()));
+        let cycle = wait_set.iter().find_map(|start| {
+            Some(path_to(&wait_map, ordset![], root, start)).filter(|s| !s.is_empty())
+        });
         match cycle {
             None => {
                 continue;
@@ -259,17 +266,23 @@ pub(super) fn deadlock_scan<'a>(
 
 pub(super) fn path_to<'a>(
     graph: &OrdMap<&'a HandleId, &'a OrdSet<HandleId>>,
+    visited: OrdSet<&'a HandleId>,
     root: &'a HandleId,
     node: &'a HandleId,
 ) -> OrdSet<&'a HandleId> {
     if node == root {
         return ordset![root];
     }
+    if visited.contains(node) {
+        return ordset![];
+    }
     match graph.get(node) {
         None => ordset![],
         Some(s) => s
             .iter()
-            .find_map(|h| Some(path_to(graph, root, h)).filter(|s| s.is_empty()))
+            .find_map(|h| {
+                Some(path_to(graph, visited.update(node), root, h)).filter(|s| !s.is_empty())
+            })
             .map_or(ordset![], |mut s| {
                 s.insert(node);
                 s
