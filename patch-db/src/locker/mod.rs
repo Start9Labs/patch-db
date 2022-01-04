@@ -10,11 +10,13 @@ mod trie;
 use imbl::{ordmap, ordset, OrdMap, OrdSet};
 use json_ptr::JsonPointer;
 use tokio::sync::{mpsc, oneshot};
+#[cfg(feature = "tracing")]
 use tracing::{debug, trace, warn};
 
-use crate::{handle::HandleId, locker::action_mux::Action};
-
-use self::{action_mux::ActionMux, bookkeeper::LockBookkeeper};
+use self::action_mux::ActionMux;
+use self::bookkeeper::LockBookkeeper;
+use crate::handle::HandleId;
+use crate::locker::action_mux::Action;
 
 pub struct Locker {
     sender: mpsc::UnboundedSender<Request>,

@@ -1,13 +1,17 @@
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, VecDeque};
 
+    use imbl::{ordmap, ordset, OrdMap, OrdSet};
     use json_ptr::JsonPointer;
+    use proptest::prelude::*;
+    use proptest::strategy::ValueTree;
+    use proptest::test_runner::{Config, TestRunner};
     use tokio::sync::oneshot;
 
     use crate::handle::HandleId;
+    use crate::locker::bookkeeper::{deadlock_scan, path_to};
     use crate::locker::{CancelGuard, Guard, LockInfo, LockType, Request};
-    use proptest::prelude::*;
 
     // enum Action {
     //     Acquire {
@@ -94,6 +98,131 @@ mod tests {
             };
             (r, c)
         }
+    }
+
+    proptest! {
+        #[test]
+        fn path_to_base_case(a in arb_handle_id(20), b in arb_handle_id(20)) {
+            let b_set = ordset![b.clone()];
+            let root = &b;
+            let node = &a;
+            let graph = ordmap!{&a => &b_set};
+            prop_assert_eq!(path_to(&graph, ordset![], root, node), ordset![root, node]);
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn path_to_transitive_existence(v in proptest::collection::vec((arb_handle_id(5), arb_handle_id(5)).prop_filter("Self Dependency", |(a, b)| a != b), 1..20), x0 in arb_handle_id(5), x1 in arb_handle_id(5), x2 in arb_handle_id(5)) {
+            let graph_owned = v.into_iter().fold(ordmap!{}, |m, (a, b)| m.update_with(a, ordset![b], OrdSet::union));
+            let graph: OrdMap<&HandleId, &OrdSet<HandleId>> = graph_owned.iter().map(|(k, v)| (k, v)).collect();
+            let avg_set_size = graph.values().fold(0, |a, b| a + b.len()) / graph.len();
+            prop_assume!(avg_set_size >= 2);
+            let k0 = path_to(&graph, ordset![], &x0, &x1);
+            let k1 = path_to(&graph, ordset![], &x1, &x2);
+            prop_assume!(!k0.is_empty());
+            prop_assume!(!k1.is_empty());
+            prop_assert!(!path_to(&graph, ordset![], &x0, &x2).is_empty());
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn path_to_bounds_inclusion(v in proptest::collection::vec((arb_handle_id(5), arb_handle_id(5)).prop_filter("Self Dependency", |(a, b)| a != b), 1..20), x0 in arb_handle_id(5), x1 in arb_handle_id(5)) {
+            let graph_owned = v.into_iter().fold(ordmap!{}, |m, (a, b)| m.update_with(a, ordset![b], OrdSet::union));
+            let graph: OrdMap<&HandleId, &OrdSet<HandleId>> = graph_owned.iter().map(|(k, v)| (k, v)).collect();
+            let avg_set_size = graph.values().fold(0, |a, b| a + b.len()) / graph.len();
+            prop_assume!(avg_set_size >= 2);
+            let k0 = path_to(&graph, ordset![], &x0, &x1);
+            prop_assume!(!k0.is_empty());
+            prop_assert!(k0.contains(&x0));
+            prop_assert!(k0.contains(&x1));
+        }
+    }
+
+    #[test]
+    fn deadlock_scan_base_case() {
+        let mut harness = TestRunner::new(Config::default());
+        let _ = harness.run(&proptest::bool::ANY, |_| {
+            let mut runner = TestRunner::new(Config::default());
+            let n = (2..10u64).new_tree(&mut runner).unwrap().current();
+            println!("Begin");
+            let mut c = VecDeque::default();
+            let mut queue = VecDeque::default();
+            for i in 0..n {
+                let mut req = arb_request(1, 5).new_tree(&mut runner).unwrap().current();
+                req.0.lock_info.handle_id.id = i;
+                let dep = if i == n - 1 { 0 } else { i + 1 };
+                queue.push_back((
+                    req.0,
+                    ordset![HandleId {
+                        id: dep,
+                        #[cfg(feature = "tracing-error")]
+                        trace: None
+                    }],
+                ));
+                c.push_back(req.1);
+            }
+            for i in &queue {
+                println!("{} => {:?}", i.0.lock_info.handle_id.id, i.1)
+            }
+            let set = deadlock_scan(&queue);
+            println!("{:?}", set);
+            assert!(!set.is_empty());
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn deadlock_scan_inductive() {
+        let mut harness = TestRunner::new(Config::default());
+        let _ = harness.run(&proptest::bool::ANY, |_| {
+            let mut runner = TestRunner::new(Config::default());
+            let mut cancels = VecDeque::default();
+            let mut queue = VecDeque::default();
+            let (r, c) = arb_request(5, 5).new_tree(&mut runner).unwrap().current();
+            queue.push_back((r, ordset![]));
+            cancels.push_back(c);
+            loop {
+                if proptest::bool::ANY.new_tree(&mut runner).unwrap().current() {
+                    // add new edge
+                    let h = arb_handle_id(5).new_tree(&mut runner).unwrap().current();
+                    let i = (0..queue.len()).new_tree(&mut runner).unwrap().current();
+                    if let Some((r, s)) = queue.get_mut(i) {
+                        if r.lock_info.handle_id != h {
+                            s.insert(h);
+                        } else {
+                            continue;
+                        }
+                    }
+                } else {
+                    // add new node
+                    let (r, c) = arb_request(5, 5).new_tree(&mut runner).unwrap().current();
+                    // but only if the session hasn't yet been used
+                    if queue
+                        .iter()
+                        .all(|(qr, _)| qr.lock_info.handle_id.id != r.lock_info.handle_id.id)
+                    {
+                        queue.push_back((r, ordset![]));
+                        cancels.push_back(c);
+                    }
+                }
+                let cycle = deadlock_scan(&queue)
+                    .into_iter()
+                    .map(|r| &r.lock_info.handle_id)
+                    .collect::<OrdSet<&HandleId>>();
+                if !cycle.is_empty() {
+                    println!("Cycle: {:?}", cycle);
+                    for (r, s) in &queue {
+                        if cycle.contains(&r.lock_info.handle_id) {
+                            assert!(s.iter().any(|h| cycle.contains(h)))
+                        }
+                    }
+                    break;
+                }
+            }
+            Ok(())
+        });
     }
 
     proptest! {

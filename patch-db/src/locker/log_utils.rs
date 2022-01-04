@@ -1,6 +1,6 @@
-use super::LockInfo;
 use imbl::OrdSet;
 
+use super::LockInfo;
 use crate::handle::HandleId;
 
 #[cfg(feature = "tracing")]
@@ -31,6 +31,7 @@ pub(super) fn fmt_deferred(deferred_lock_info: &LockInfo) -> String {
     )
 }
 
+#[cfg(feature = "tracing")]
 pub(super) fn fmt_released(released_lock_info: &LockInfo) -> String {
     format!(
         "Released: session {} - {} lock on {}",
@@ -38,6 +39,7 @@ pub(super) fn fmt_released(released_lock_info: &LockInfo) -> String {
     )
 }
 
+#[cfg(feature = "tracing")]
 pub(super) fn fmt_cancelled(cancelled_lock_info: &LockInfo) -> String {
     format!(
         "Canceled: session {} - {} lock on {}",
