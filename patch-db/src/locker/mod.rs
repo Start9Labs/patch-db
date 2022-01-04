@@ -3,6 +3,8 @@ mod bookkeeper;
 mod log_utils;
 mod natural;
 mod order_enforcer;
+#[cfg(test)]
+pub(crate) mod proptest;
 mod trie;
 
 use imbl::{ordmap, ordset, OrdMap, OrdSet};
@@ -66,23 +68,6 @@ impl Locker {
         ptr: JsonPointer,
         lock_type: LockType,
     ) -> Result<Guard, LockError> {
-        // Local Definitions
-        struct CancelGuard {
-            lock_info: Option<LockInfo>,
-            channel: Option<oneshot::Sender<LockInfo>>,
-            recv: oneshot::Receiver<Result<Guard, LockError>>,
-        }
-        impl Drop for CancelGuard {
-            fn drop(&mut self) {
-                if let (Some(lock_info), Some(channel)) =
-                    (self.lock_info.take(), self.channel.take())
-                {
-                    self.recv.close();
-                    let _ = channel.send(lock_info);
-                }
-            }
-        }
-
         // Pertinent Logic
         let lock_info = LockInfo {
             handle_id,
@@ -106,6 +91,20 @@ impl Locker {
         let res = (&mut cancel_guard.recv).await.unwrap();
         cancel_guard.channel.take();
         res
+    }
+} // Local Definitions
+#[derive(Debug)]
+struct CancelGuard {
+    lock_info: Option<LockInfo>,
+    channel: Option<oneshot::Sender<LockInfo>>,
+    recv: oneshot::Receiver<Result<Guard, LockError>>,
+}
+impl Drop for CancelGuard {
+    fn drop(&mut self) {
+        if let (Some(lock_info), Some(channel)) = (self.lock_info.take(), self.channel.take()) {
+            self.recv.close();
+            let _ = channel.send(lock_info);
+        }
     }
 }
 
