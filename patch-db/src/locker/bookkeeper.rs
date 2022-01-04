@@ -7,7 +7,7 @@ use crate::{
         LockSet,
     },
 };
-use imbl::{ordset, OrdMap, OrdSet};
+use imbl::{ordmap, ordset, OrdMap, OrdSet};
 use tokio::sync::oneshot;
 use tracing::{debug, error, info, warn};
 
@@ -217,15 +217,14 @@ fn kill_deadlocked(request_queue: &mut VecDeque<(Request, OrdSet<HandleId>)>, tr
     }
 }
 
-fn deadlock_scan<'a>(queue: &'a VecDeque<(Request, OrdSet<HandleId>)>) -> Vec<&'a Request> {
+pub(super) fn deadlock_scan<'a>(
+    queue: &'a VecDeque<(Request, OrdSet<HandleId>)>,
+) -> Vec<&'a Request> {
     let (wait_map, mut req_map) = queue
         .iter()
         .map(|(req, set)| ((&req.lock_info.handle_id, set, req)))
         .fold(
-            (
-                OrdMap::<&'a HandleId, &'a OrdSet<HandleId>>::new(),
-                OrdMap::<&'a HandleId, &'a Request>::new(),
-            ),
+            (ordmap! {}, ordmap! {}),
             |(mut wmap, mut rmap), (id, wset, req)| {
                 (
                     {
@@ -239,25 +238,6 @@ fn deadlock_scan<'a>(queue: &'a VecDeque<(Request, OrdSet<HandleId>)>) -> Vec<&'
                 )
             },
         );
-    fn path_to<'a>(
-        graph: &OrdMap<&'a HandleId, &'a OrdSet<HandleId>>,
-        root: &'a HandleId,
-        node: &'a HandleId,
-    ) -> OrdSet<&'a HandleId> {
-        if node == root {
-            return ordset![root];
-        }
-        match graph.get(node) {
-            None => ordset![],
-            Some(s) => s
-                .iter()
-                .find_map(|h| Some(path_to(graph, root, h)).filter(|s| s.is_empty()))
-                .map_or(ordset![], |mut s| {
-                    s.insert(node);
-                    s
-                }),
-        }
-    }
     for (root, wait_set) in wait_map.iter() {
         let cycle = wait_set
             .iter()
@@ -275,4 +255,24 @@ fn deadlock_scan<'a>(queue: &'a VecDeque<(Request, OrdSet<HandleId>)>) -> Vec<&'
         }
     }
     vec![]
+}
+
+pub(super) fn path_to<'a>(
+    graph: &OrdMap<&'a HandleId, &'a OrdSet<HandleId>>,
+    root: &'a HandleId,
+    node: &'a HandleId,
+) -> OrdSet<&'a HandleId> {
+    if node == root {
+        return ordset![root];
+    }
+    match graph.get(node) {
+        None => ordset![],
+        Some(s) => s
+            .iter()
+            .find_map(|h| Some(path_to(graph, root, h)).filter(|s| s.is_empty()))
+            .map_or(ordset![], |mut s| {
+                s.insert(node);
+                s
+            }),
+    }
 }
