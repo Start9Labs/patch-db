@@ -76,6 +76,7 @@ impl Locker {
             ptr,
             ty: lock_type,
         };
+        println!("{}", &lock_info);
         let (send, recv) = oneshot::channel();
         let (cancel_send, cancel_recv) = oneshot::channel();
         let mut cancel_guard = CancelGuard {
@@ -249,7 +250,7 @@ pub enum LockError {
         first: JsonPointer,
         second: JsonPointer,
     },
-    #[error("Deadlock Detected: Locks Held = {locks_held}, Locks Waiting = {locks_waiting}")]
+    #[error("Deadlock Detected:\nLocks Held =\n{locks_held},\nLocks Waiting =\n{locks_waiting}")]
     DeadlockDetected {
         locks_held: LockSet,
         locks_waiting: LockSet,

@@ -11,7 +11,8 @@ mod tests {
 
     use crate::handle::HandleId;
     use crate::locker::bookkeeper::{deadlock_scan, path_to};
-    use crate::locker::{CancelGuard, Guard, LockInfo, LockType, Request};
+    use crate::locker::{CancelGuard, Guard, LockError, LockInfo, LockType, Request};
+    use crate::Locker;
 
     // enum Action {
     //     Acquire {
@@ -157,7 +158,7 @@ mod tests {
                     req.0,
                     ordset![HandleId {
                         id: dep,
-                        #[cfg(feature = "tracing-error")]
+                        #[cfg(feature = "trace")]
                         trace: None
                     }],
                 ));
@@ -223,6 +224,50 @@ mod tests {
             }
             Ok(())
         });
+    }
+
+    #[tokio::test]
+    async fn deadlock_kill_live() {
+        let locker = Locker::new();
+        let s0 = HandleId {
+            id: 0,
+            #[cfg(feature = "trace")]
+            trace: None,
+        };
+        let s1 = HandleId {
+            id: 1,
+            #[cfg(feature = "trace")]
+            trace: None,
+        };
+        let x = locker
+            .lock(s0.clone(), "/a/b".parse().unwrap(), LockType::Read)
+            .await;
+        assert!(x.is_ok());
+        let y = locker
+            .lock(s1.clone(), "/a/b".parse().unwrap(), LockType::Read)
+            .await;
+        assert!(y.is_ok());
+        let x = tokio::select! {
+            r0 = locker.lock(s0, "/a/b".parse().unwrap(), LockType::Write) => r0,
+            r1 = locker.lock(s1, "/a/b".parse().unwrap(), LockType::Write) => r1,
+        };
+        match x {
+            Ok(g) => {
+                println!("wat");
+                drop(g);
+                assert!(false);
+            }
+            Err(e) => match e {
+                LockError::DeadlockDetected { .. } => {
+                    println!("{}", e);
+                }
+                _ => {
+                    println!("{}", e);
+                    #[cfg(not(feature = "unstable"))]
+                    assert!(false);
+                }
+            },
+        }
     }
 
     proptest! {

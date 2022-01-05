@@ -1,7 +1,5 @@
-use tokio::sync::{
-    mpsc::{self, UnboundedReceiver},
-    oneshot,
-};
+use tokio::sync::mpsc::{self, UnboundedReceiver};
+use tokio::sync::oneshot;
 
 use super::{LockInfo, Request};
 
@@ -20,13 +18,16 @@ pub(super) struct ActionMux {
     inbound_request_queue: InboundRequestQueue,
     unlock_receivers: Vec<oneshot::Receiver<LockInfo>>,
     cancellation_receivers: Vec<oneshot::Receiver<LockInfo>>,
+    _dummy_senders: Vec<oneshot::Sender<LockInfo>>,
 }
 impl ActionMux {
     pub fn new(inbound_receiver: UnboundedReceiver<Request>) -> Self {
         // futures::future::select_all will panic if the list is empty
         // instead we want it to block forever by adding a channel that will never recv
-        let unlock_receivers = vec![oneshot::channel().1];
-        let cancellation_receivers = vec![oneshot::channel().1];
+        let (unlock_dummy_send, unlock_dummy_recv) = oneshot::channel();
+        let unlock_receivers = vec![unlock_dummy_recv];
+        let (cancel_dummy_send, cancel_dummy_recv) = oneshot::channel();
+        let cancellation_receivers = vec![cancel_dummy_recv];
         ActionMux {
             inbound_request_queue: InboundRequestQueue {
                 recv: inbound_receiver,
@@ -34,6 +35,7 @@ impl ActionMux {
             },
             unlock_receivers,
             cancellation_receivers,
+            _dummy_senders: vec![unlock_dummy_send, cancel_dummy_send],
         }
     }
     pub async fn get_action(&mut self) -> Option<Action> {

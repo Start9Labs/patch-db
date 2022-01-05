@@ -53,6 +53,7 @@ impl LockBookkeeper {
 
         if let Some(hot_seat) = hot_seat {
             self.deferred_request_queue.push_front(hot_seat);
+            kill_deadlocked(&mut self.deferred_request_queue, &mut self.trie);
         }
         Ok(res)
     }
@@ -126,6 +127,7 @@ impl LockBookkeeper {
         }
         if let Some(hot_seat) = hot_seat {
             self.deferred_request_queue.push_front(hot_seat);
+            kill_deadlocked(&mut self.deferred_request_queue, &mut self.trie);
         }
         new_unlock_receivers
     }
@@ -157,7 +159,6 @@ fn process_new_req(
             }
 
             request_queue.push_back((req, ordset![]));
-            kill_deadlocked(request_queue, &*trie);
             None
         }
         // otherwise we try and service it immediately, only pushing to the queue if it fails
@@ -179,7 +180,6 @@ fn process_new_req(
                 }
 
                 request_queue.push_back((req, blocking_sessions));
-                kill_deadlocked(request_queue, &*trie);
                 None
             }
         },
@@ -189,8 +189,7 @@ fn process_new_req(
 fn kill_deadlocked(request_queue: &mut VecDeque<(Request, OrdSet<HandleId>)>, trie: &LockTrie) {
     // TODO optimize this, it is unlikely that we are anywhere close to as efficient as we can be here.
     let deadlocked_reqs = deadlock_scan(request_queue);
-    let last = request_queue.back().unwrap();
-    if !deadlocked_reqs.is_empty() && deadlocked_reqs.iter().any(|r| std::ptr::eq(*r, &last.0)) {
+    if !deadlocked_reqs.is_empty() {
         let locks_waiting = LockSet(
             deadlocked_reqs
                 .iter()
@@ -204,23 +203,20 @@ fn kill_deadlocked(request_queue: &mut VecDeque<(Request, OrdSet<HandleId>)>, tr
             locks_held: LockSet(trie.subtree_lock_info()),
         };
 
-        request_queue.pop_back().unwrap().0.reject(err);
-
-        // This commented logic is for if we want to kill the whole cycle, rather than the most recent addition
-        // let mut indices_to_remove = Vec::with_capacity(deadlocked_reqs.len());
-        // for (i, (req, _)) in request_queue.iter().enumerate() {
-        //     if deadlocked_reqs.iter().any(|r| std::ptr::eq(*r, req)) {
-        //         indices_to_remove.push(i)
-        //     }
-        // }
-        // let old = std::mem::take(request_queue);
-        // for (i, (r, s)) in old.into_iter().enumerate() {
-        //     if indices_to_remove.contains(&i) {
-        //         r.reject(err.clone())
-        //     } else {
-        //         request_queue.push_back((r, s))
-        //     }
-        // }
+        let mut indices_to_remove = Vec::with_capacity(deadlocked_reqs.len());
+        for (i, (req, _)) in request_queue.iter().enumerate() {
+            if deadlocked_reqs.iter().any(|r| std::ptr::eq(*r, req)) {
+                indices_to_remove.push(i)
+            }
+        }
+        let old = std::mem::take(request_queue);
+        for (i, (r, s)) in old.into_iter().enumerate() {
+            if indices_to_remove.contains(&i) {
+                r.reject(err.clone())
+            } else {
+                request_queue.push_back((r, s))
+            }
+        }
     }
 }
 
