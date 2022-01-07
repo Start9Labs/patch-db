@@ -76,7 +76,6 @@ impl Locker {
             ptr,
             ty: lock_type,
         };
-        println!("{}", &lock_info);
         let (send, recv) = oneshot::channel();
         let (cancel_send, cancel_recv) = oneshot::channel();
         let mut cancel_guard = CancelGuard {
