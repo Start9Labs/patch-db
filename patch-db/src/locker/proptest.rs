@@ -272,6 +272,50 @@ mod tests {
 
     proptest! {
         #[test]
+        fn trie_lock_inverse_identity(lock_order in proptest::collection::vec(arb_lock_info(1, 5), 1..30)) {
+            use crate::locker::trie::LockTrie;
+            use rand::seq::SliceRandom;
+            let mut trie = LockTrie::default();
+            for i in &lock_order {
+                trie.try_lock(i).expect(&format!("try_lock failed: {}", i));
+            }
+            let mut release_order = lock_order.clone();
+            let slice: &mut [LockInfo] = &mut release_order[..];
+            slice.shuffle(&mut rand::thread_rng());
+            for i in &release_order {
+                trie.unlock(i);
+            }
+            prop_assert_eq!(trie, LockTrie::default())
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn existence_ancestors_dont_block_descendent_writes(s0 in arb_handle_id(10), s1 in arb_handle_id(10), mut ptr0 in arb_json_ptr(3), ptr1 in arb_json_ptr(3)) {
+            use crate::locker::trie::LockTrie;
+            prop_assume!(s0 != s1);
+            let mut trie = LockTrie::default();
+            let li0 = LockInfo {
+                handle_id: s0,
+                ty: LockType::Exist,
+                ptr: ptr0.clone()
+            };
+            println!("{}", ptr0);
+            ptr0.append(&ptr1);
+            println!("{}", ptr0);
+            let li1 = LockInfo {
+                handle_id: s1,
+                ty: LockType::Write,
+                ptr: ptr0.clone()
+            };
+            trie.try_lock(&li0).unwrap();
+            println!("{:?}", trie);
+            trie.try_lock(&li1).expect("E locks don't prevent child locks");
+        }
+    }
+
+    proptest! {
+        #[test]
         fn zero_or_one_write_lock_per_traversal(x in 0..10) {
             // if there is a write lock in the traversal, then the cardinality of the set of all lock holders on that traversal must be exactly 1
             let x = 1..100i32;

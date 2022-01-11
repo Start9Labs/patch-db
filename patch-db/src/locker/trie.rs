@@ -3,9 +3,10 @@ use std::collections::BTreeMap;
 use imbl::{ordset, OrdSet};
 use json_ptr::{JsonPointer, SegList};
 
-use crate::{handle::HandleId, LockType};
-
-use super::{natural::Natural, LockInfo};
+use super::natural::Natural;
+use super::LockInfo;
+use crate::handle::HandleId;
+use crate::LockType;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum LockState {
@@ -351,7 +352,7 @@ impl Default for LockState {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq, Eq)]
 
 pub(super) struct LockTrie {
     state: LockState,
@@ -596,8 +597,9 @@ impl LockTrie {
 
 #[cfg(test)]
 mod proptest {
-    use super::*;
     use ::proptest::prelude::*;
+
+    use super::*;
 
     fn lock_type_gen() -> BoxedStrategy<crate::LockType> {
         prop_oneof![
