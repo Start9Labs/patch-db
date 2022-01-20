@@ -38,7 +38,7 @@ impl ActionMux {
             _dummy_senders: vec![unlock_dummy_send, cancel_dummy_send],
         }
     }
-    pub async fn get_action(&mut self) -> Option<Action> {
+    async fn get_action(&mut self) -> Option<Action> {
         loop {
             if self.inbound_request_queue.closed
                 && self.unlock_receivers.len() == 1
@@ -65,6 +65,35 @@ impl ActionMux {
                     }
                 }
             }
+        }
+    }
+
+    pub async fn get_prioritized_action_queue(&mut self) -> Vec<Action> {
+        if let Some(action) = self.get_action().await {
+            let mut actions = Vec::new();
+            // find all serviceable lock releases
+            for mut r in std::mem::take(&mut self.unlock_receivers) {
+                if let Ok(lock_info) = r.try_recv() {
+                    actions.push(Action::HandleRelease(lock_info));
+                } else {
+                    self.unlock_receivers.push(r);
+                }
+            }
+
+            // find all serviceable lock cancellations
+            for mut r in std::mem::take(&mut self.cancellation_receivers) {
+                if let Ok(lock_info) = r.try_recv() {
+                    actions.push(Action::HandleCancel(lock_info));
+                } else {
+                    self.cancellation_receivers.push(r);
+                }
+            }
+
+            // finally add the action that started it all
+            actions.push(action);
+            actions
+        } else {
+            Vec::new()
         }
     }
 
