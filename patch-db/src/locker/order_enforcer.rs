@@ -7,6 +7,7 @@ use super::{LockError, LockInfo};
 use crate::handle::HandleId;
 use crate::LockType;
 
+#[derive(Debug, PartialEq, Eq)]
 pub(super) struct LockOrderEnforcer {
     locks_held: OrdMap<HandleId, OrdMap<(JsonPointer, LockType), usize>>,
 }

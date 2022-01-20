@@ -291,6 +291,26 @@ mod tests {
 
     proptest! {
         #[test]
+        fn enforcer_lock_inverse_identity(lock_order in proptest::collection::vec(arb_lock_info(1,3), 1..30)) {
+            use crate::locker::order_enforcer::LockOrderEnforcer;
+            use rand::seq::SliceRandom;
+            let mut enforcer = LockOrderEnforcer::new();
+            for i in &lock_order {
+                enforcer.try_insert(i);
+            }
+            let mut release_order = lock_order.clone();
+            let slice: &mut [LockInfo] = &mut release_order[..];
+            slice.shuffle(&mut rand::thread_rng());
+            prop_assert!(enforcer != LockOrderEnforcer::new());
+            for i in &release_order {
+                enforcer.remove(i);
+            }
+            prop_assert_eq!(enforcer, LockOrderEnforcer::new());
+        }
+    }
+
+    proptest! {
+        #[test]
         fn existence_ancestors_dont_block_descendent_writes(s0 in arb_handle_id(10), s1 in arb_handle_id(10), mut ptr0 in arb_json_ptr(3), ptr1 in arb_json_ptr(3)) {
             use crate::locker::trie::LockTrie;
             prop_assume!(s0 != s1);

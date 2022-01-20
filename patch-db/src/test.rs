@@ -8,7 +8,7 @@ use serde_json::Value;
 use tokio::fs;
 use tokio::runtime::Builder;
 
-use crate::{self as patch_db, DbHandle};
+use crate::{self as patch_db, DbHandle, LockType};
 
 async fn init_db(db_name: String) -> PatchDb {
     cleanup_db(&db_name).await;
@@ -101,3 +101,16 @@ pub struct Child {
 
 #[derive(Debug, serde::Deserialize, serde::Serialize, HasModel)]
 pub struct NewType(Option<Box<Sample>>);
+
+#[tokio::test]
+async fn locks_dropped_from_enforcer_on_tx_save() {
+    let db = init_db("test.db".to_string()).await;
+    let mut handle = db.handle();
+    let mut tx = handle.begin().await.unwrap();
+    let ptr_a: JsonPointer = "/a".parse().unwrap();
+    let ptr_b: JsonPointer = "/b".parse().unwrap();
+    tx.lock(ptr_b, LockType::Write).await.unwrap();
+    tx.save().await.unwrap();
+    handle.lock(ptr_a, LockType::Write).await.unwrap();
+    cleanup_db("test.db").await;
+}

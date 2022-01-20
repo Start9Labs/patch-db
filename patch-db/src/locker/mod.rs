@@ -28,36 +28,45 @@ impl Locker {
             let mut action_mux = ActionMux::new(receiver);
             let mut lock_server = LockBookkeeper::new();
 
-            while let Some(action) = action_mux.get_action().await {
-                #[cfg(feature = "tracing")]
-                trace!("Locker Action: {:#?}", action);
-                match action {
-                    Action::HandleRequest(mut req) => {
-                        #[cfg(feature = "tracing")]
-                        debug!("New lock request: {}", &req.lock_info);
+            loop {
+                let actions = action_mux.get_prioritized_action_queue().await;
+                if actions.is_empty() {
+                    break;
+                }
+                for action in actions {
+                    #[cfg(feature = "tracing")]
+                    trace!("Locker Action: {:#?}", action);
+                    match action {
+                        Action::HandleRequest(mut req) => {
+                            #[cfg(feature = "tracing")]
+                            debug!("New lock request: {}", &req.lock_info);
 
-                        // Pertinent Logic
-                        let req_cancel = req.cancel.take().expect("Request Cancellation Stolen");
-                        match lock_server.lease(req) {
-                            Ok(Some(recv)) => {
-                                action_mux.push_unlock_receivers(std::iter::once(recv))
+                            // Pertinent Logic
+                            let req_cancel =
+                                req.cancel.take().expect("Request Cancellation Stolen");
+                            match lock_server.lease(req) {
+                                Ok(Some(recv)) => {
+                                    action_mux.push_unlock_receivers(std::iter::once(recv))
+                                }
+                                Ok(None) => action_mux.push_cancellation_receiver(req_cancel),
+                                Err(_) => {}
                             }
-                            Ok(None) => action_mux.push_cancellation_receiver(req_cancel),
-                            Err(_) => {}
                         }
-                    }
-                    Action::HandleRelease(lock_info) => {
-                        #[cfg(feature = "tracing")]
-                        debug!("New lock release: {}", &lock_info);
+                        Action::HandleRelease(lock_info) => {
+                            #[cfg(feature = "tracing")]
+                            debug!("New lock release: {}", &lock_info);
 
-                        let new_unlock_receivers = lock_server.ret(&lock_info);
-                        action_mux.push_unlock_receivers(new_unlock_receivers);
-                    }
-                    Action::HandleCancel(lock_info) => {
-                        #[cfg(feature = "tracing")]
-                        debug!("New request canceled: {}", &lock_info);
+                            println!("Release Called {}", &lock_info);
 
-                        lock_server.cancel(&lock_info)
+                            let new_unlock_receivers = lock_server.ret(&lock_info);
+                            action_mux.push_unlock_receivers(new_unlock_receivers);
+                        }
+                        Action::HandleCancel(lock_info) => {
+                            #[cfg(feature = "tracing")]
+                            debug!("New request canceled: {}", &lock_info);
+
+                            lock_server.cancel(&lock_info)
+                        }
                     }
                 }
             }
