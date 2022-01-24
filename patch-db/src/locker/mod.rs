@@ -56,8 +56,6 @@ impl Locker {
                             #[cfg(feature = "tracing")]
                             debug!("New lock release: {}", &lock_info);
 
-                            println!("Release Called {}", &lock_info);
-
                             let new_unlock_receivers = lock_server.ret(&lock_info);
                             action_mux.push_unlock_receivers(new_unlock_receivers);
                         }
