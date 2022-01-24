@@ -1,5 +1,6 @@
 use tokio::sync::mpsc::{self, UnboundedReceiver};
 use tokio::sync::oneshot;
+use tokio::sync::oneshot::error::TryRecvError;
 
 use super::{LockInfo, Request};
 
@@ -73,19 +74,27 @@ impl ActionMux {
             let mut actions = Vec::new();
             // find all serviceable lock releases
             for mut r in std::mem::take(&mut self.unlock_receivers) {
-                if let Ok(lock_info) = r.try_recv() {
-                    actions.push(Action::HandleRelease(lock_info));
-                } else {
-                    self.unlock_receivers.push(r);
+                match r.try_recv() {
+                    Ok(lock_info) => {
+                        actions.push(Action::HandleRelease(lock_info));
+                    }
+                    Err(TryRecvError::Empty) => {
+                        self.unlock_receivers.push(r);
+                    }
+                    Err(TryRecvError::Closed) => (),
                 }
             }
 
             // find all serviceable lock cancellations
             for mut r in std::mem::take(&mut self.cancellation_receivers) {
-                if let Ok(lock_info) = r.try_recv() {
-                    actions.push(Action::HandleCancel(lock_info));
-                } else {
-                    self.cancellation_receivers.push(r);
+                match r.try_recv() {
+                    Ok(lock_info) => {
+                        actions.push(Action::HandleCancel(lock_info));
+                    }
+                    Err(TryRecvError::Empty) => {
+                        self.cancellation_receivers.push(r);
+                    }
+                    Err(TryRecvError::Closed) => (),
                 }
             }
 
