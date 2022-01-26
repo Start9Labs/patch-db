@@ -218,7 +218,7 @@ pub struct PatchDb {
 }
 impl PatchDb {
     pub async fn open<P: AsRef<Path>>(path: P) -> Result<Self, Error> {
-        let (subscriber, _) = tokio::sync::broadcast::channel(512); // TODO: make this unbounded
+        let (subscriber, _) = tokio::sync::broadcast::channel(4096); // TODO: make this unbounded
 
         Ok(PatchDb {
             store: Arc::new(RwLock::new(Store::open(path).await?)),
