@@ -83,8 +83,7 @@ impl Store {
             backup_file.flush()?;
             backup_file.sync_all()?;
             std::fs::rename(&bak_tmp, &bak)?;
-            nix::unistd::ftruncate(std::os::unix::io::AsRawFd::as_raw_fd(&*f), 0)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            f.set_len(0)?;
             serde_cbor::to_writer(&mut *f, &revision)?;
             serde_cbor::to_writer(&mut *f, &data)?;
             f.flush()?;
@@ -187,7 +186,7 @@ impl Store {
         async fn sync_to_disk(file: &mut File, patch_bin: &[u8]) -> Result<(), IOError> {
             file.write_all(patch_bin).await?;
             file.flush().await?;
-            file.sync_data().await?;
+            file.sync_all().await?;
             Ok(())
         }
         if let Err(e) = sync_to_disk(&mut *self.file, &patch_bin).await {
