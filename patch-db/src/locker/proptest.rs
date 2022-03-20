@@ -9,10 +9,16 @@ mod tests {
     use proptest::test_runner::{Config, TestRunner};
     use tokio::sync::oneshot;
 
-    use crate::handle::HandleId;
-    use crate::locker::bookkeeper::{deadlock_scan, path_to};
-    use crate::locker::{CancelGuard, Guard, LockError, LockInfo, LockType, Request};
     use crate::Locker;
+    use crate::{handle::HandleId, JsonGlobSegment};
+    use crate::{
+        locker::bookkeeper::{deadlock_scan, path_to},
+        JsonGlob,
+    };
+    use crate::{
+        locker::{CancelGuard, Guard, LockError, LockInfo, LockInfos, LockType, Request},
+        model_paths::PathWithStar,
+    };
 
     // enum Action {
     //     Acquire {
@@ -66,11 +72,22 @@ mod tests {
             })
             .boxed()
     }
+    fn arb_model_paths(max_size: usize) -> impl Strategy<Value = JsonGlob> {
+        proptest::collection::vec("[a-z*]", 1..max_size).prop_map(|a_s| {
+            a_s.into_iter()
+                .fold(String::new(), |mut s, x| {
+                    s.push_str(&x);
+                    s
+                })
+                .parse::<JsonGlob>()
+                .unwrap()
+        })
+    }
 
     fn arb_lock_info(session_bound: u64, ptr_max_size: usize) -> BoxedStrategy<LockInfo> {
         arb_handle_id(session_bound)
             .prop_flat_map(move |handle_id| {
-                arb_json_ptr(ptr_max_size).prop_flat_map(move |ptr| {
+                arb_model_paths(ptr_max_size).prop_flat_map(move |ptr| {
                     let handle_id = handle_id.clone();
                     arb_lock_type().prop_map(move |ty| LockInfo {
                         handle_id: handle_id.clone(),
@@ -87,13 +104,13 @@ mod tests {
             let (cancel_send, cancel_recv) = oneshot::channel();
             let (guard_send, guard_recv) = oneshot::channel();
             let r = Request {
-                lock_info: li.clone(),
+                lock_info: LockInfos::LockInfo(li.clone()),
                 cancel: Some(cancel_recv),
                 completion: guard_send,
 
             };
             let c = CancelGuard {
-                lock_info: Some(li),
+                lock_info: Some(LockInfos::LockInfo(li)),
                 channel: Some(cancel_send),
                 recv: guard_recv,
             };
@@ -152,7 +169,12 @@ mod tests {
             let mut queue = VecDeque::default();
             for i in 0..n {
                 let mut req = arb_request(1, 5).new_tree(&mut runner).unwrap().current();
-                req.0.lock_info.handle_id.id = i;
+                match req.0.lock_info {
+                    LockInfos::LockInfo(ref mut li) => {
+                        li.handle_id.id = i;
+                    }
+                    _ => unreachable!(),
+                }
                 let dep = if i == n - 1 { 0 } else { i + 1 };
                 queue.push_back((
                     req.0,
@@ -165,7 +187,9 @@ mod tests {
                 c.push_back(req.1);
             }
             for i in &queue {
-                println!("{} => {:?}", i.0.lock_info.handle_id.id, i.1)
+                for info in i.0.lock_info.as_vec() {
+                    println!("{} => {:?}", info.handle_id.id, i.1)
+                }
             }
             let set = deadlock_scan(&queue);
             println!("{:?}", set);
@@ -190,7 +214,7 @@ mod tests {
                     let h = arb_handle_id(5).new_tree(&mut runner).unwrap().current();
                     let i = (0..queue.len()).new_tree(&mut runner).unwrap().current();
                     if let Some((r, s)) = queue.get_mut(i) {
-                        if r.lock_info.handle_id != h {
+                        if r.lock_info.as_vec().iter().all(|x| x.handle_id != h) {
                             s.insert(h);
                         } else {
                             continue;
@@ -199,24 +223,34 @@ mod tests {
                 } else {
                     // add new node
                     let (r, c) = arb_request(5, 5).new_tree(&mut runner).unwrap().current();
+                    let request_infos = r.lock_info.as_vec();
                     // but only if the session hasn't yet been used
-                    if queue
-                        .iter()
-                        .all(|(qr, _)| qr.lock_info.handle_id.id != r.lock_info.handle_id.id)
-                    {
+                    if queue.iter().all(|(qr, _)| {
+                        for qr_info in qr.lock_info.as_vec() {
+                            for request_info in request_infos.iter() {
+                                if qr_info.handle_id == request_info.handle_id {
+                                    return false;
+                                }
+                            }
+                        }
+                        true
+                    }) {
                         queue.push_back((r, ordset![]));
                         cancels.push_back(c);
                     }
                 }
                 let cycle = deadlock_scan(&queue)
                     .into_iter()
-                    .map(|r| &r.lock_info.handle_id)
+                    .flat_map(|x| x.lock_info.as_vec())
+                    .map(|r| &r.handle_id)
                     .collect::<OrdSet<&HandleId>>();
                 if !cycle.is_empty() {
                     println!("Cycle: {:?}", cycle);
                     for (r, s) in &queue {
-                        if cycle.contains(&r.lock_info.handle_id) {
-                            assert!(s.iter().any(|h| cycle.contains(h)))
+                        for info in r.lock_info.as_vec() {
+                            if cycle.contains(&info.handle_id) {
+                                assert!(s.iter().any(|h| cycle.contains(h)))
+                            }
                         }
                     }
                     break;
@@ -277,7 +311,7 @@ mod tests {
             use rand::seq::SliceRandom;
             let mut trie = LockTrie::default();
             for i in &lock_order {
-                trie.try_lock(i).expect(&format!("try_lock failed: {}", i));
+                trie.try_lock(&LockInfos::LockInfo(i.clone())).expect(&format!("try_lock failed: {}", i));
             }
             let mut release_order = lock_order.clone();
             let slice: &mut [LockInfo] = &mut release_order[..];
@@ -318,7 +352,7 @@ mod tests {
             let li0 = LockInfo {
                 handle_id: s0,
                 ty: LockType::Exist,
-                ptr: ptr0.clone()
+                ptr: ptr0.clone().into()
             };
             println!("{}", ptr0);
             ptr0.append(&ptr1);
@@ -326,11 +360,11 @@ mod tests {
             let li1 = LockInfo {
                 handle_id: s1,
                 ty: LockType::Write,
-                ptr: ptr0.clone()
+                ptr: ptr0.clone().into()
             };
-            trie.try_lock(&li0).unwrap();
+            trie.try_lock(&LockInfos::LockInfo(li0)).unwrap();
             println!("{:?}", trie);
-            trie.try_lock(&li1).expect("E locks don't prevent child locks");
+            trie.try_lock(&LockInfos::LockInfo(li1)).expect("E locks don't prevent child locks");
         }
     }
 

@@ -8,8 +8,11 @@ use serde_json::Value;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-use crate::locker::{Guard, LockType};
-use crate::patch::DiffPatch;
+use crate::{
+    bulk_locks::{self, Verifier},
+    locker::{Guard, LockType},
+};
+use crate::{model_paths::JsonGlob, patch::DiffPatch};
 use crate::{Error, Locker, PatchDb, Revision, Store, Transaction};
 
 #[derive(Debug, Clone, Default)]
@@ -34,10 +37,13 @@ impl Ord for HandleId {
         self.id.cmp(&other.id)
     }
 }
-
 #[async_trait]
-pub trait DbHandle: Send + Sync {
+pub trait DbHandle: Send + Sync + Sized {
     async fn begin<'a>(&'a mut self) -> Result<Transaction<&'a mut Self>, Error>;
+    async fn lock_all<'a>(
+        &'a mut self,
+        locks: Vec<bulk_locks::LockTargetId>,
+    ) -> Result<bulk_locks::Verifier, Error>;
     fn id(&self) -> HandleId;
     fn rebase(&mut self) -> Result<(), Error>;
     fn store(&self) -> Arc<RwLock<Store>>;
@@ -68,7 +74,7 @@ pub trait DbHandle: Send + Sync {
         patch: DiffPatch,
         store_write_lock: Option<RwLockWriteGuard<'_, Store>>,
     ) -> Result<Option<Arc<Revision>>, Error>;
-    async fn lock(&mut self, ptr: JsonPointer, lock_type: LockType) -> Result<(), Error>;
+    async fn lock(&mut self, ptr: JsonGlob, lock_type: LockType) -> Result<(), Error>;
     async fn get<
         T: for<'de> Deserialize<'de>,
         S: AsRef<str> + Send + Sync,
@@ -154,7 +160,7 @@ impl<Handle: DbHandle + ?Sized> DbHandle for &mut Handle {
     ) -> Result<Option<Arc<Revision>>, Error> {
         (*self).apply(patch, store_write_lock).await
     }
-    async fn lock(&mut self, ptr: JsonPointer, lock_type: LockType) -> Result<(), Error> {
+    async fn lock(&mut self, ptr: JsonGlob, lock_type: LockType) -> Result<(), Error> {
         (*self).lock(ptr, lock_type).await
     }
     async fn get<
@@ -177,6 +183,13 @@ impl<Handle: DbHandle + ?Sized> DbHandle for &mut Handle {
         value: &T,
     ) -> Result<Option<Arc<Revision>>, Error> {
         (*self).put(ptr, value).await
+    }
+
+    async fn lock_all<'a>(
+        &'a mut self,
+        locks: Vec<bulk_locks::LockTargetId>,
+    ) -> Result<bulk_locks::Verifier, Error> {
+        (*self).lock_all(locks).await
     }
 }
 
@@ -266,10 +279,10 @@ impl DbHandle for PatchDbHandle {
     ) -> Result<Option<Arc<Revision>>, Error> {
         self.db.apply(patch, None, store_write_lock).await
     }
-    async fn lock(&mut self, ptr: JsonPointer, lock_type: LockType) -> Result<(), Error> {
-        Ok(self
-            .locks
-            .push(self.db.locker.lock(self.id.clone(), ptr, lock_type).await?))
+    async fn lock(&mut self, ptr: JsonGlob, lock_type: LockType) -> Result<(), Error> {
+        self.locks
+            .push(self.db.locker.lock(self.id.clone(), ptr, lock_type).await?);
+        Ok(())
     }
     async fn get<
         T: for<'de> Deserialize<'de>,
@@ -291,5 +304,118 @@ impl DbHandle for PatchDbHandle {
         value: &T,
     ) -> Result<Option<Arc<Revision>>, Error> {
         self.db.put(ptr, value, None).await
+    }
+
+    async fn lock_all<'a>(
+        &'a mut self,
+        locks: Vec<bulk_locks::LockTargetId>,
+    ) -> Result<bulk_locks::Verifier, Error> {
+        let skeleton_key = Verifier {
+            target_locks: locks.iter().cloned().collect(),
+        };
+        self.locks
+            .push(self.db.locker.lock_all(self.id.clone(), locks).await?);
+        Ok(skeleton_key)
+    }
+}
+
+pub mod test_utils {
+    use async_trait::async_trait;
+
+    use crate::{Error, Locker, Revision, Store, Transaction};
+
+    use super::*;
+
+    pub struct NoOpDb();
+
+    #[async_trait]
+    impl DbHandle for NoOpDb {
+        async fn begin<'a>(&'a mut self) -> Result<Transaction<&'a mut Self>, Error> {
+            unimplemented!()
+        }
+        fn id(&self) -> HandleId {
+            unimplemented!()
+        }
+        fn rebase(&mut self) -> Result<(), Error> {
+            unimplemented!()
+        }
+        fn store(&self) -> Arc<RwLock<Store>> {
+            unimplemented!()
+        }
+        fn subscribe(&self) -> Receiver<Arc<Revision>> {
+            unimplemented!()
+        }
+        fn locker(&self) -> &Locker {
+            unimplemented!()
+        }
+        async fn exists<S: AsRef<str> + Send + Sync, V: SegList + Send + Sync>(
+            &mut self,
+            _ptr: &JsonPointer<S, V>,
+            _store_read_lock: Option<RwLockReadGuard<'_, Store>>,
+        ) -> Result<bool, Error> {
+            unimplemented!()
+        }
+        async fn keys<S: AsRef<str> + Send + Sync, V: SegList + Send + Sync>(
+            &mut self,
+            _ptr: &JsonPointer<S, V>,
+            _store_read_lock: Option<RwLockReadGuard<'_, Store>>,
+        ) -> Result<BTreeSet<String>, Error> {
+            unimplemented!()
+        }
+        async fn get_value<S: AsRef<str> + Send + Sync, V: SegList + Send + Sync>(
+            &mut self,
+            _ptr: &JsonPointer<S, V>,
+            _store_read_lock: Option<RwLockReadGuard<'_, Store>>,
+        ) -> Result<Value, Error> {
+            unimplemented!()
+        }
+        async fn put_value<S: AsRef<str> + Send + Sync, V: SegList + Send + Sync>(
+            &mut self,
+            _ptr: &JsonPointer<S, V>,
+            _value: &Value,
+        ) -> Result<Option<Arc<Revision>>, Error> {
+            unimplemented!()
+        }
+        async fn apply(
+            &mut self,
+            _patch: DiffPatch,
+            _store_write_lock: Option<RwLockWriteGuard<'_, Store>>,
+        ) -> Result<Option<Arc<Revision>>, Error> {
+            unimplemented!()
+        }
+        async fn lock(&mut self, _ptr: JsonGlob, _lock_type: LockType) -> Result<(), Error> {
+            unimplemented!()
+        }
+        async fn get<
+            T: for<'de> Deserialize<'de>,
+            S: AsRef<str> + Send + Sync,
+            V: SegList + Send + Sync,
+        >(
+            &mut self,
+            _ptr: &JsonPointer<S, V>,
+        ) -> Result<T, Error> {
+            unimplemented!()
+        }
+        async fn put<
+            T: Serialize + Send + Sync,
+            S: AsRef<str> + Send + Sync,
+            V: SegList + Send + Sync,
+        >(
+            &mut self,
+            _ptr: &JsonPointer<S, V>,
+            _value: &T,
+        ) -> Result<Option<Arc<Revision>>, Error> {
+            unimplemented!()
+        }
+
+        async fn lock_all<'a>(
+            &'a mut self,
+            locks: Vec<bulk_locks::LockTargetId>,
+        ) -> Result<bulk_locks::Verifier, Error> {
+            let skeleton_key = Verifier {
+                target_locks: locks.iter().cloned().collect(),
+            };
+            Ok(skeleton_key)
+        }
     }
 }
