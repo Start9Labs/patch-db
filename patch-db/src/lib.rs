@@ -32,7 +32,7 @@ pub use store::{PatchDb, Store};
 pub use transaction::Transaction;
 pub use {json_patch, json_ptr};
 
-pub use bulk_locks::{LockReceipt, LockTarget};
+pub use bulk_locks::{LockReceipt, LockTarget, LockTargetId, Verifier};
 
 pub mod test_utils {
     use super::*;

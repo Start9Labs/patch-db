@@ -166,6 +166,11 @@ fn build_model_struct(
             return quote! {
                 #[derive(Debug)]
                 #model_vis struct #model_name(#inner_model);
+                impl #model_name {
+                    pub fn into_model(self) -> patch_db::Model<#base_name> {
+                        self.into()
+                    }
+                }
                 impl std::clone::Clone for #model_name {
                     fn clone(&self) -> Self {
                         #model_name(self.0.clone())
@@ -190,6 +195,11 @@ fn build_model_struct(
                 impl From<patch_db::JsonGlob> for #model_name {
                     fn from(ptr: patch_db::JsonGlob) -> Self {
                         #model_name(#inner_model::from(ptr))
+                    }
+                }
+                impl From<#model_name> for patch_db::Model<#base_name> {
+                    fn from(model: #model_name) -> Self {
+                        model.0
                     }
                 }
                 impl From<#model_name> for patch_db::json_ptr::JsonPointer {
@@ -297,6 +307,9 @@ fn build_model_struct(
                     #child_path_expr
                 }
             )*
+            pub fn into_model(self) -> patch_db::Model<#base_name> {
+                self.into()
+            }
         }
         impl From<patch_db::json_ptr::JsonPointer> for #model_name {
             fn from(ptr: patch_db::json_ptr::JsonPointer) -> Self {
@@ -306,6 +319,11 @@ fn build_model_struct(
         impl From<patch_db::JsonGlob> for #model_name {
             fn from(ptr: patch_db::JsonGlob) -> Self {
                 #model_name(From::from(ptr))
+            }
+        }
+        impl From<#model_name> for patch_db::Model<#base_name> {
+            fn from(model: #model_name) -> Self {
+                model.0
             }
         }
         impl From<#model_name> for patch_db::json_ptr::JsonPointer {

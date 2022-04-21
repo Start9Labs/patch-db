@@ -153,7 +153,7 @@ where
     ) -> Result<(), Error> {
         self.set_(db_handle, new_value, &[binds.0, binds.1]).await
     }
-    pub async fn get_at<DH: DbHandle>(
+    pub async fn get<DH: DbHandle>(
         &self,
         db_handle: &mut DH,
         binds: (&str, &str),

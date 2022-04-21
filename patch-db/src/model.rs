@@ -133,7 +133,7 @@ where
     T: Serialize + for<'de> Deserialize<'de>,
 {
     /// Used to create a lock for the db
-    pub fn make_locker<SB>(self, lock_type: LockType) -> LockTarget<T, SB>
+    pub fn make_locker<SB>(&self, lock_type: LockType) -> LockTarget<T, SB>
     where
         JsonGlob: AsPhantom<SB>,
     {
@@ -141,7 +141,7 @@ where
             lock_type,
             db_type: self.phantom,
             star_binds: self.path.as_phantom_binds(),
-            glob: self.path,
+            glob: self.path.clone(),
         }
     }
 }
