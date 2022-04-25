@@ -484,14 +484,17 @@ fn conflicts_with_locker_infos_cases() {
     ]);
     let lock_infos_set_all = LockInfos::LockInfos(vec![
         lock_info_a,
-        lock_info_a_s,
-        lock_info_a_s_c,
+        lock_info_a_s.clone(),
+        lock_info_a_s_c.clone(),
         lock_info_a_b_c,
     ]);
 
     assert!(!lock_infos_b.conflicts_with(&lock_infos_a));
     assert!(!lock_infos_a.conflicts_with(&lock_infos_a)); // same lock won't
     assert!(lock_infos_a_s.conflicts_with(&lock_infos_a)); // Since the parent is locked, it won't be able to
+    assert!(lock_infos_a_s.conflicts_with(&LockInfos::LockInfo(lock_info_a_s_c.clone())));
+    assert!(LockInfos::LockInfo(lock_info_a_s_c.clone())
+        .conflicts_with(&LockInfos::LockInfo(lock_info_a_b_c)));
     assert!(!lock_infos_set.conflicts_with(&lock_infos_a)); // Same lock again
     assert!(lock_infos_set.conflicts_with(&lock_infos_set_deep)); // Since this is a parent
     assert!(!lock_infos_set_b.conflicts_with(&lock_infos_set_deep)); // Sets are exclusive
