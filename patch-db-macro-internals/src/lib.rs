@@ -163,7 +163,7 @@ fn build_model_struct(
             } else {
                 syn::parse2(quote! { patch_db::Model::<#ty> }).unwrap()
             };
-            return quote! {
+            let result = quote! {
                 #[derive(Debug)]
                 #model_vis struct #model_name(#inner_model);
                 impl #model_name {
@@ -199,7 +199,7 @@ fn build_model_struct(
                 }
                 impl From<#model_name> for patch_db::Model<#base_name> {
                     fn from(model: #model_name) -> Self {
-                        model.0
+                        patch_db::Model::from(patch_db::JsonGlob::from(model))
                     }
                 }
                 impl From<#model_name> for patch_db::json_ptr::JsonPointer {
@@ -231,6 +231,8 @@ fn build_model_struct(
                     type Model = #model_name;
                 }
             };
+            // panic!("{}", result);
+            return result;
         }
         Fields::Unnamed(f) if f.unnamed.len() > 1 => {
             for (i, field) in f.unnamed.iter().enumerate() {
