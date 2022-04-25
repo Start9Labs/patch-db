@@ -76,25 +76,20 @@ impl LockBookkeeper {
             None => {
                 #[cfg(feature = "tracing")]
                 {
-                    match info {
-                        LockInfos::LockInfo(info) => warn!(
-                            "Received cancellation for a lock not currently waiting: {}",
-                            info.ptr
-                        ),
-                        LockInfos::LockInfos(infos) => warn!(
-                            "Received cancellation for some locks not currently waiting: [{}]",
-                            infos
-                                .iter()
-                                .enumerate()
-                                .fold(String::new(), |acc, (i, new)| {
-                                    if i > 0 {
-                                        format!("{}/{}", acc, new.ptr)
-                                    } else {
-                                        format!("/{}", new.ptr)
-                                    }
-                                })
-                        ),
-                    }
+                    let infos = &info.0;
+                    warn!(
+                        "Received cancellation for some locks not currently waiting: [{}]",
+                        infos
+                            .iter()
+                            .enumerate()
+                            .fold(String::new(), |acc, (i, new)| {
+                                if i > 0 {
+                                    format!("{}/{}", acc, new.ptr)
+                                } else {
+                                    format!("/{}", new.ptr)
+                                }
+                            })
+                    );
                 }
                 return;
             }

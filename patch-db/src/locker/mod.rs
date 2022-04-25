@@ -152,7 +152,7 @@ impl Drop for CancelGuard {
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct LockInfos(Vec<LockInfo>);
+struct LockInfos(pub Vec<LockInfo>);
 impl LockInfos {
     fn conflicts_with(&self, other: &LockInfos) -> bool {
         let other_lock_infos = &other.0;
