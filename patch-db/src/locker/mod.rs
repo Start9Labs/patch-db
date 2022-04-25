@@ -93,7 +93,7 @@ impl Locker {
         locks: Vec<LockTargetId>,
     ) -> Result<Guard, LockError> {
         // Pertinent Logic
-        let lock_info: LockInfos = LockInfos::LockInfos(
+        let lock_info: LockInfos = LockInfos(
             locks
                 .into_iter()
                 .zip(std::iter::repeat(handle_id))
@@ -151,60 +151,30 @@ impl Drop for CancelGuard {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-enum LockInfos {
-    LockInfo(LockInfo),
-    LockInfos(Vec<LockInfo>),
-}
+#[derive(Debug, Default, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct LockInfos(Vec<LockInfo>);
 impl LockInfos {
     fn conflicts_with(&self, other: &LockInfos) -> bool {
-        match (self, other) {
-            (LockInfos::LockInfo(lock_info), LockInfos::LockInfo(other_lock_info)) => {
-                lock_info.conflicts_with(other_lock_info)
-            }
-            (LockInfos::LockInfo(lock_info), LockInfos::LockInfos(other_lock_infos)) => {
-                other_lock_infos
-                    .iter()
-                    .any(|other_lock_info| lock_info.conflicts_with(other_lock_info))
-            }
-            (LockInfos::LockInfos(lock_infos), LockInfos::LockInfo(other_lock_info)) => lock_infos
+        let other_lock_infos = &other.0;
+        self.0.iter().any(|lock_info| {
+            other_lock_infos
                 .iter()
-                .any(|lock_info| lock_info.conflicts_with(other_lock_info)),
-            (LockInfos::LockInfos(lock_infos), LockInfos::LockInfos(other_lock_infos)) => {
-                lock_infos.iter().any(|lock_info| {
-                    other_lock_infos
-                        .iter()
-                        .any(|other_lock_info| lock_info.conflicts_with(other_lock_info))
-                })
-            }
-        }
+                .any(|other_lock_info| lock_info.conflicts_with(other_lock_info))
+        })
     }
 
     fn as_vec(&self) -> Vec<&LockInfo> {
-        match self {
-            LockInfos::LockInfo(x) => vec![x],
-            LockInfos::LockInfos(xs) => xs.iter().collect::<Vec<_>>(),
-        }
+        self.0.iter().collect::<Vec<_>>()
     }
 }
 
 impl std::fmt::Display for LockInfos {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            LockInfos::LockInfo(lock_info) => write!(f, "{}", lock_info),
-            LockInfos::LockInfos(lock_infos) => {
-                for lock_info in lock_infos {
-                    write!(f, "{},", lock_info)?;
-                }
-                Ok(())
-            }
+        let lock_infos = &self.0;
+        for lock_info in lock_infos {
+            write!(f, "{},", lock_info)?;
         }
-    }
-}
-
-impl Default for LockInfos {
-    fn default() -> Self {
-        LockInfos::LockInfo(LockInfo::default())
+        Ok(())
     }
 }
 
@@ -258,7 +228,7 @@ impl LockInfo {
 
 impl From<LockInfo> for LockInfos {
     fn from(lock_info: LockInfo) -> Self {
-        LockInfos::LockInfo(lock_info)
+        LockInfos(vec![lock_info])
     }
 }
 impl std::fmt::Display for LockInfo {
@@ -422,7 +392,7 @@ fn conflicts_with_locker_infos_cases() {
         ty: LockType::Write,
         ptr: "/a".parse().unwrap(),
     };
-    let lock_infos_a = LockInfos::LockInfo(lock_info_a.clone());
+    let lock_infos_a = LockInfos(vec![lock_info_a.clone()]);
     let lock_info_b = LockInfo {
         handle_id: HandleId {
             id: {
@@ -435,7 +405,7 @@ fn conflicts_with_locker_infos_cases() {
         ty: LockType::Write,
         ptr: "/b".parse().unwrap(),
     };
-    let lock_infos_b = LockInfos::LockInfo(lock_info_b.clone());
+    let lock_infos_b = LockInfos(vec![lock_info_b.clone()]);
     let lock_info_a_s = LockInfo {
         handle_id: HandleId {
             id: {
@@ -448,7 +418,7 @@ fn conflicts_with_locker_infos_cases() {
         ty: LockType::Write,
         ptr: "/a/*".parse().unwrap(),
     };
-    let lock_infos_a_s = LockInfos::LockInfo(lock_info_a_s.clone());
+    let lock_infos_a_s = LockInfos(vec![lock_info_a_s.clone()]);
     let lock_info_a_s_c = LockInfo {
         handle_id: HandleId {
             id: {
@@ -461,7 +431,7 @@ fn conflicts_with_locker_infos_cases() {
         ty: LockType::Write,
         ptr: "/a/*/c".parse().unwrap(),
     };
-    let lock_infos_a_s_c = LockInfos::LockInfo(lock_info_a_s_c.clone());
+    let lock_infos_a_s_c = LockInfos(vec![lock_info_a_s_c.clone()]);
 
     let lock_info_a_b_c = LockInfo {
         handle_id: HandleId {
@@ -475,16 +445,16 @@ fn conflicts_with_locker_infos_cases() {
         ty: LockType::Write,
         ptr: "/a/b/c".parse().unwrap(),
     };
-    let lock_infos_a_b_c = LockInfos::LockInfo(lock_info_a_b_c.clone());
+    let lock_infos_a_b_c = LockInfos(vec![lock_info_a_b_c.clone()]);
 
-    let lock_infos_set = LockInfos::LockInfos(vec![lock_info_a.clone()]);
-    let lock_infos_set_b = LockInfos::LockInfos(vec![lock_info_b]);
-    let lock_infos_set_deep = LockInfos::LockInfos(vec![
+    let lock_infos_set = LockInfos(vec![lock_info_a.clone()]);
+    let lock_infos_set_b = LockInfos(vec![lock_info_b]);
+    let lock_infos_set_deep = LockInfos(vec![
         lock_info_a_s.clone(),
         lock_info_a_s_c.clone(),
         lock_info_a_b_c.clone(),
     ]);
-    let lock_infos_set_all = LockInfos::LockInfos(vec![
+    let lock_infos_set_all = LockInfos(vec![
         lock_info_a,
         lock_info_a_s,
         lock_info_a_s_c,

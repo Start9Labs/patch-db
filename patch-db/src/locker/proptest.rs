@@ -104,13 +104,13 @@ mod tests {
             let (cancel_send, cancel_recv) = oneshot::channel();
             let (guard_send, guard_recv) = oneshot::channel();
             let r = Request {
-                lock_info: LockInfos::LockInfo(li.clone()),
+                lock_info: LockInfos(vec![li.clone()]),
                 cancel: Some(cancel_recv),
                 completion: guard_send,
 
             };
             let c = CancelGuard {
-                lock_info: Some(LockInfos::LockInfo(li)),
+                lock_info: Some(LockInfos(vec![li])),
                 channel: Some(cancel_send),
                 recv: guard_recv,
             };
@@ -170,8 +170,8 @@ mod tests {
             for i in 0..n {
                 let mut req = arb_request(1, 5).new_tree(&mut runner).unwrap().current();
                 match req.0.lock_info {
-                    LockInfos::LockInfo(ref mut li) => {
-                        li.handle_id.id = i;
+                    LockInfos(ref mut li) => {
+                        li[0].handle_id.id = i;
                     }
                     _ => unreachable!(),
                 }
@@ -311,7 +311,7 @@ mod tests {
             use rand::seq::SliceRandom;
             let mut trie = LockTrie::default();
             for i in &lock_order {
-                trie.try_lock(&LockInfos::LockInfo(i.clone())).expect(&format!("try_lock failed: {}", i));
+                trie.try_lock(&LockInfos(vec![i.clone()])).expect(&format!("try_lock failed: {}", i));
             }
             let mut release_order = lock_order.clone();
             let slice: &mut [LockInfo] = &mut release_order[..];
@@ -362,9 +362,9 @@ mod tests {
                 ty: LockType::Write,
                 ptr: ptr0.clone().into()
             };
-            trie.try_lock(&LockInfos::LockInfo(li0)).unwrap();
+            trie.try_lock(&LockInfos(vec![li0])).unwrap();
             println!("{:?}", trie);
-            trie.try_lock(&LockInfos::LockInfo(li1)).expect("E locks don't prevent child locks");
+            trie.try_lock(&LockInfos(vec![li1])).expect("E locks don't prevent child locks");
         }
     }
 

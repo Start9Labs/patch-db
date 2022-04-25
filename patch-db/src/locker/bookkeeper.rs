@@ -249,7 +249,8 @@ fn kill_deadlocked(request_queue: &mut VecDeque<(Request, OrdSet<HandleId>)>, tr
             locks_held: LockSet(
                 trie.subtree_lock_info()
                     .into_iter()
-                    .map(LockInfos::LockInfo)
+                    .map(|x| vec![x])
+                    .map(LockInfos)
                     .collect(),
             ),
         };
