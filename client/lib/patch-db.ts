@@ -36,8 +36,6 @@ export class PatchDB<T> {
 
   clean () {
     this.sourcesSub.unsubscribe()
-    if (this.updatesSub) {
-      this.updatesSub.unsubscribe()
-    }
+    this.updatesSub?.unsubscribe()
   }
 }

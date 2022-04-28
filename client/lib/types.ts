@@ -23,7 +23,7 @@ export interface Bootstrapper<T> {
   update (cache: DBCache<T>): Promise<void>
 }
 
-export interface DBCache<T extends { [key: string]: any }>{
+export interface DBCache<T extends Record<string, any>>{
   sequence: number,
   data: T
 }

@@ -70,20 +70,12 @@ export class Store<T extends { [key: string]: any }> {
     this.processStashed(revision.id)
   }
 
-  private handleDump (dump: Dump<T>): void {
-    Object.keys(this.cache.data).forEach(key => {
-      if (dump.value[key] === undefined) {
-        delete this.cache.data[key]
-      }
-    })
-
-    Object.entries(dump.value).forEach(([key, val]) => {
-      (this.cache.data as any)[key] = val
-    })
-    this.stash.deleteRange(this.cache.sequence, dump.id, false)
+  private handleDump ({ value, id }: Dump<T>): void {
+    this.cache.data = { ...value }
+    this.stash.deleteRange(this.cache.sequence, id, false)
     this.updateWatchedNodes('')
-    this.updateSequence(dump.id)
-    this.processStashed(dump.id + 1)
+    this.updateSequence(id)
+    this.processStashed(id + 1)
   }
 
   private processStashed (id: number): void {
@@ -95,9 +87,7 @@ export class Store<T extends { [key: string]: any }> {
     let stashEntry = this.stash.get(this.stash.maxKey() as number)
 
     while (stashEntry && stashEntry.revision.id > id) {
-      stashEntry.undo.forEach(u => {
-        applyOperation(this.cache.data, u)
-      })
+      stashEntry.undo.forEach(u => applyOperation(this.cache, u))
       stashEntry = this.stash.nextLowerPair(stashEntry.revision.id)?.[1]
     }
   }
@@ -106,18 +96,16 @@ export class Store<T extends { [key: string]: any }> {
     let revision = this.stash.get(id)?.revision
     while (revision) {
       let undo: Operation[] = []
-
       let success = false
+
       try {
         revision.patch.forEach(op => {
-          const u = applyOperation(this.cache.data, op)
+          const u = applyOperation(this.cache, op)
           if (u) undo.push(u)
         })
         success = true
       } catch (e) {
-        undo.forEach(u => {
-          applyOperation(this.cache.data, u)
-        })
+        undo.forEach(u => applyOperation(this.cache, u))
         undo = []
       }
 
@@ -163,6 +151,6 @@ export class Store<T extends { [key: string]: any }> {
   }
 
   private isRevision (update: Update<T>): update is Revision {
-    return !!(update as Revision).patch
+    return 'patch' in update
   }
 }
