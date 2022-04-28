@@ -10,9 +10,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    bulk_locks::{self, LockTarget},
+    bulk_locks::{self, unsaturated_args::AsUnsaturatedArgs, LockTarget},
     locker::LockType,
-    model_paths::{AsPhantom, JsonGlob},
+    model_paths::JsonGlob,
 };
 use crate::{DbHandle, DiffPatch, Error, Revision};
 
@@ -135,12 +135,12 @@ where
     /// Used to create a lock for the db
     pub fn make_locker<SB>(&self, lock_type: LockType) -> LockTarget<T, SB>
     where
-        JsonGlob: AsPhantom<SB>,
+        JsonGlob: AsUnsaturatedArgs<SB>,
     {
         bulk_locks::LockTarget {
             lock_type,
             db_type: self.phantom,
-            star_binds: self.path.as_phantom_binds(),
+            _star_binds: self.path.as_unsaturated_args(),
             glob: self.path.clone(),
         }
     }
@@ -390,11 +390,11 @@ where
     /// Used to create a lock for the db
     pub fn make_locker<SB>(self, lock_type: LockType) -> LockTarget<T, SB>
     where
-        JsonGlob: AsPhantom<SB>,
+        JsonGlob: AsUnsaturatedArgs<SB>,
     {
         let paths: JsonGlob = self.into();
         bulk_locks::LockTarget {
-            star_binds: paths.as_phantom_binds(),
+            _star_binds: paths.as_unsaturated_args(),
             glob: paths,
             lock_type,
             db_type: PhantomData,

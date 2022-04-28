@@ -1,4 +1,4 @@
-use std::{marker::PhantomData, str::FromStr};
+use std::str::FromStr;
 
 use json_ptr::JsonPointer;
 
@@ -257,70 +257,6 @@ impl JsonGlob {
             JsonGlob::Path(_) => 0,
             JsonGlob::PathWithStar(PathWithStar { count, .. }) => *count,
         }
-    }
-}
-
-/// Used to determine the phantom type for bindings, () for no binds, String for one, (String, String) for two, ...
-/// Also, there are message to indicate that this is not valid
-pub trait AsPhantom<SB> {
-    fn as_phantom_binds(&self) -> PhantomData<SB>;
-}
-
-impl AsPhantom<()> for JsonGlob {
-    fn as_phantom_binds(&self) -> PhantomData<()> {
-        let count = match self {
-            JsonGlob::PathWithStar(PathWithStar { count, .. }) => *count,
-            JsonGlob::Path(_) => 0,
-        };
-        if count != 0 {
-            #[cfg(feature = "tracing")]
-            tracing::error!("By counts={}, this phantom type = () is not valid", count);
-            #[cfg(feature = "unstable")]
-            panic!("By counts={}, this phantom type = () is not valid", count);
-        }
-        PhantomData
-    }
-}
-impl AsPhantom<String> for JsonGlob {
-    fn as_phantom_binds(&self) -> PhantomData<String> {
-        let count = match self {
-            JsonGlob::PathWithStar(PathWithStar { count, .. }) => *count,
-            JsonGlob::Path(_) => 0,
-        };
-        if count != 1 {
-            #[cfg(feature = "tracing")]
-            tracing::error!(
-                "By counts={}, this phantom type = String is not valid",
-                count
-            );
-            #[cfg(feature = "unstable")]
-            panic!(
-                "By counts={}, this phantom type = String is not valid",
-                count
-            );
-        }
-        PhantomData
-    }
-}
-impl AsPhantom<(String, String)> for JsonGlob {
-    fn as_phantom_binds(&self) -> PhantomData<(String, String)> {
-        let count = match self {
-            JsonGlob::PathWithStar(PathWithStar { count, .. }) => *count,
-            JsonGlob::Path(_) => 0,
-        };
-        if count != 2 {
-            #[cfg(feature = "tracing")]
-            tracing::error!(
-                "By counts={}, this phantom type = (String, String) is not valid",
-                count
-            );
-            #[cfg(feature = "unstable")]
-            panic!(
-                "By counts={}, this phantom type = (String, String) is not valid",
-                count
-            );
-        }
-        PhantomData
     }
 }
 

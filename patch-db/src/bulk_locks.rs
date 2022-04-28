@@ -5,6 +5,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{model_paths::JsonGlob, DbHandle, Error, LockType};
 
+use self::unsaturated_args::UnsaturatedArgs;
+
+pub mod unsaturated_args;
+
 /// Used at the beggining of a set of code that may acquire locks into a db.
 /// This will be used to represent a potential lock that would be used, and this will then be
 /// sent to a bulk locker, that will take multiple of these targets and lock them all at once instead
@@ -19,8 +23,8 @@ where
     pub lock_type: LockType,
     /// What the target will eventually need to return in a get, or value to be put in a set
     pub(crate) db_type: PhantomData<T>,
-    /// How many stars that need to be bound to actual paths.
-    pub(crate) star_binds: PhantomData<StarBinds>,
+    /// How many stars (potential keys in maps, ...) that need to be bound to actual paths.
+    pub(crate) _star_binds: UnsaturatedArgs<StarBinds>,
 }
 
 /// This is acting as a newtype for the copyable section
