@@ -544,17 +544,14 @@ impl LockTrie {
         session: &HandleId,
     ) -> Option<&'a HandleId> {
         let vectors_and_tries = self.ancestors_and_trie(ptr);
-        vectors_and_tries
-            .into_iter()
-            .filter_map(|(v, t)| {
-                // there can only be one write session per traversal
-                let ancestor_write = v.into_iter().find_map(|s| s.write_session());
-                let node_write = t.and_then(|t| t.state.write_session());
-                ancestor_write
-                    .or(node_write)
-                    .and_then(|s| if s == session { None } else { Some(s) })
-            })
-            .next()
+        vectors_and_tries.into_iter().find_map(|(v, t)| {
+            // there can only be one write session per traversal
+            let ancestor_write = v.into_iter().find_map(|s| s.write_session());
+            let node_write = t.and_then(|t| t.state.write_session());
+            ancestor_write
+                .or(node_write)
+                .and_then(|s| if s == session { None } else { Some(s) })
+        })
     }
     // ancestors with writes, subtrees with writes
     fn sessions_blocking_read<'a>(
