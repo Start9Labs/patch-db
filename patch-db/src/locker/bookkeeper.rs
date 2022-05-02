@@ -38,11 +38,9 @@ impl LockBookkeeper {
         req: Request,
     ) -> Result<Option<oneshot::Receiver<LockInfos>>, LockError> {
         #[cfg(feature = "unstable")]
-        for info in req.lock_info.as_vec() {
-            if let Err(e) = self.order_enforcer.try_insert(info) {
-                req.reject(e.clone());
-                return Err(e);
-            }
+        if let Err(e) = self.order_enforcer.try_insert(&req.lock_info) {
+            req.reject(e.clone());
+            return Err(e);
         }
 
         // In normal operation we start here
@@ -187,7 +185,7 @@ fn process_new_req(
                 for lock_info in lock_infos.iter() {
                     info!("{}", fmt_deferred(&lock_info));
                 }
-                for hot_req_lock_info in hot_req.lock_info.as_vec() {
+                if let Some(hot_req_lock_info) = hot_req.lock_info.as_vec().first() {
                     debug!(
                         "Must wait on hot seat request from session {}",
                         &hot_req_lock_info.handle_id.id

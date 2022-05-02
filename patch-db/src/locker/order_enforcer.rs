@@ -14,7 +14,7 @@ pub(super) struct LockOrderEnforcer {
     locks_held: OrdMap<HandleId, OrdMap<(JsonGlob, LockType), usize>>,
 }
 impl LockOrderEnforcer {
-    #[cfg(test)]
+    #[cfg(any(feature = "unstable", test))]
     pub fn new() -> Self {
         LockOrderEnforcer {
             locks_held: imbl::ordmap! {},
@@ -100,29 +100,35 @@ impl LockOrderEnforcer {
         }
     }
     #[cfg(any(feature = "unstable", test))]
-    pub(super) fn try_insert(&mut self, req: &LockInfo) -> Result<(), LockError> {
-        self.validate(req)?;
-        match self.locks_held.get_mut(&req.handle_id) {
-            None => {
-                self.locks_held.insert(
-                    req.handle_id.clone(),
-                    imbl::ordmap![(req.ptr.clone(), req.ty) => 1],
-                );
-            }
-            Some(locks) => {
-                let k = (req.ptr.clone(), req.ty);
-                match locks.get_mut(&k) {
-                    None => {
-                        locks.insert(k, 1);
-                    }
-                    Some(n) => {
-                        *n += 1;
+    pub(super) fn try_insert(&mut self, reqs: &super::LockInfos) -> Result<(), LockError> {
+        // These are seperate since we want to check all first before we insert
+        for req in reqs.as_vec() {
+            self.validate(req)?;
+        }
+        for req in reqs.as_vec() {
+            match self.locks_held.get_mut(&req.handle_id) {
+                None => {
+                    self.locks_held.insert(
+                        req.handle_id.clone(),
+                        imbl::ordmap![(req.ptr.clone(), req.ty) => 1],
+                    );
+                }
+                Some(locks) => {
+                    let k = (req.ptr.clone(), req.ty);
+                    match locks.get_mut(&k) {
+                        None => {
+                            locks.insert(k, 1);
+                        }
+                        Some(n) => {
+                            *n += 1;
+                        }
                     }
                 }
             }
         }
         Ok(())
     }
+    #[cfg(any(feature = "unstable", test))]
     pub(super) fn remove(&mut self, req: &LockInfo) {
         match self.locks_held.remove_with_key(&req.handle_id) {
             None => {

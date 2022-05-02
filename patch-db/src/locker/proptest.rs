@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, VecDeque};
+    use std::collections::VecDeque;
 
     use imbl::{ordmap, ordset, OrdMap, OrdSet};
     use json_ptr::JsonPointer;
@@ -9,15 +9,12 @@ mod tests {
     use proptest::test_runner::{Config, TestRunner};
     use tokio::sync::oneshot;
 
+    use crate::handle::HandleId;
+    use crate::locker::{CancelGuard, LockError, LockInfo, LockInfos, LockType, Request};
     use crate::Locker;
-    use crate::{handle::HandleId, JsonGlobSegment};
     use crate::{
         locker::bookkeeper::{deadlock_scan, path_to},
         JsonGlob,
-    };
-    use crate::{
-        locker::{CancelGuard, Guard, LockError, LockInfo, LockInfos, LockType, Request},
-        model_paths::PathWithStar,
     };
 
     // enum Action {
@@ -98,19 +95,39 @@ mod tests {
             })
             .boxed()
     }
+    fn arb_lock_infos(
+        session_bound: u64,
+        ptr_max_size: usize,
+        max_size: usize,
+    ) -> BoxedStrategy<LockInfos> {
+        arb_handle_id(session_bound)
+            .prop_flat_map(move |handle_id| {
+                proptest::collection::vec(arb_lock_info(session_bound, ptr_max_size), 1..max_size)
+                    .prop_map(move |xs| {
+                        xs.into_iter()
+                            .map(|mut x| {
+                                x.handle_id = handle_id.clone();
+                                x
+                            })
+                            .collect::<Vec<_>>()
+                    })
+            })
+            .prop_map(LockInfos)
+            .boxed()
+    }
 
     prop_compose! {
-        fn arb_request(session_bound: u64, ptr_max_size: usize)(li in arb_lock_info(session_bound, ptr_max_size)) -> (Request, CancelGuard) {
+        fn arb_request(session_bound: u64, ptr_max_size: usize)(lis in arb_lock_infos(session_bound, ptr_max_size, 10)) -> (Request, CancelGuard) {
             let (cancel_send, cancel_recv) = oneshot::channel();
             let (guard_send, guard_recv) = oneshot::channel();
             let r = Request {
-                lock_info: LockInfos(vec![li.clone()]),
+                lock_info: lis.clone(),
                 cancel: Some(cancel_recv),
                 completion: guard_send,
 
             };
             let c = CancelGuard {
-                lock_info: Some(LockInfos(vec![li])),
+                lock_info: Some(lis),
                 channel: Some(cancel_send),
                 recv: guard_recv,
             };
@@ -306,18 +323,20 @@ mod tests {
 
     proptest! {
         #[test]
-        fn trie_lock_inverse_identity(lock_order in proptest::collection::vec(arb_lock_info(1, 5), 1..30)) {
+        fn trie_lock_inverse_identity(lock_order in proptest::collection::vec(arb_lock_infos(1, 5, 10), 1..30)) {
             use crate::locker::trie::LockTrie;
             use rand::seq::SliceRandom;
             let mut trie = LockTrie::default();
             for i in &lock_order {
-                trie.try_lock(&LockInfos(vec![i.clone()])).expect(&format!("try_lock failed: {}", i));
+                trie.try_lock(i).expect(&format!("try_lock failed: {}", i));
             }
             let mut release_order = lock_order.clone();
-            let slice: &mut [LockInfo] = &mut release_order[..];
+            let slice: &mut [LockInfos] = &mut release_order[..];
             slice.shuffle(&mut rand::thread_rng());
-            for i in &release_order {
-                trie.unlock(i);
+            for is in &release_order {
+                for i in is.as_vec() {
+                    trie.unlock(i);
+                }
             }
             prop_assert_eq!(trie, LockTrie::default())
         }
@@ -325,7 +344,7 @@ mod tests {
 
     proptest! {
         #[test]
-        fn enforcer_lock_inverse_identity(lock_order in proptest::collection::vec(arb_lock_info(1,3), 1..30)) {
+        fn enforcer_lock_inverse_identity(lock_order in proptest::collection::vec(arb_lock_infos(1,3,10), 1..30)) {
             use crate::locker::order_enforcer::LockOrderEnforcer;
             use rand::seq::SliceRandom;
             let mut enforcer = LockOrderEnforcer::new();
@@ -333,11 +352,13 @@ mod tests {
                 enforcer.try_insert(i);
             }
             let mut release_order = lock_order.clone();
-            let slice: &mut [LockInfo] = &mut release_order[..];
+            let slice: &mut [LockInfos] = &mut release_order[..];
             slice.shuffle(&mut rand::thread_rng());
             prop_assert!(enforcer != LockOrderEnforcer::new());
-            for i in &release_order {
-                enforcer.remove(i);
+            for is in &release_order {
+                for i in is.as_vec() {
+                    enforcer.remove(i);
+                }
             }
             prop_assert_eq!(enforcer, LockOrderEnforcer::new());
         }

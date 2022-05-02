@@ -133,9 +133,7 @@ impl Locker {
         cancel_guard.channel.take();
         res
     }
-
-    // async fn _lock()
-} // Local Definitions
+}
 #[derive(Debug)]
 struct CancelGuard {
     lock_info: Option<LockInfos>,
@@ -163,8 +161,8 @@ impl LockInfos {
         })
     }
 
-    fn as_vec(&self) -> Vec<&LockInfo> {
-        self.0.iter().collect::<Vec<_>>()
+    fn as_vec(&self) -> &Vec<LockInfo> {
+        &self.0
     }
 }
 
