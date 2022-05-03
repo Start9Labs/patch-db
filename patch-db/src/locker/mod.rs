@@ -15,7 +15,7 @@ use tracing::{debug, trace, warn};
 
 use self::action_mux::ActionMux;
 use self::bookkeeper::LockBookkeeper;
-use crate::{bulk_locks::LockTargetId, locker::action_mux::Action};
+use crate::{bulk_locks::LockTargetId, locker::action_mux::Action, Verifier};
 use crate::{handle::HandleId, JsonGlob};
 
 pub struct Locker {
@@ -89,30 +89,27 @@ impl Locker {
 
     pub async fn lock_all(
         &self,
-        handle_id: HandleId,
-        locks: Vec<LockTargetId>,
+        handle_id: &HandleId,
+        locks: impl IntoIterator<Item = LockTargetId> + Send,
     ) -> Result<Guard, LockError> {
-        // Pertinent Logic
-        let lock_info: LockInfos = LockInfos(
+        let lock_infos = LockInfos(
             locks
                 .into_iter()
-                .zip(std::iter::repeat(handle_id))
                 .map(
-                    |(
-                        LockTargetId {
-                            glob: paths,
-                            lock_type,
-                        },
-                        handle_id,
-                    )| LockInfo {
-                        handle_id,
-                        ptr: paths,
-                        ty: lock_type,
+                    |LockTargetId {
+                         glob: ptr,
+                         lock_type: ty,
+                     }| {
+                        LockInfo {
+                            handle_id: handle_id.clone(),
+                            ptr,
+                            ty,
+                        }
                     },
                 )
                 .collect(),
         );
-        self._lock(lock_info).await
+        self._lock(lock_infos).await
     }
     async fn _lock(&self, lock_info: LockInfos) -> Result<Guard, LockError> {
         let (send, recv) = oneshot::channel();

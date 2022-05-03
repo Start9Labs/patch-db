@@ -42,7 +42,7 @@ pub trait DbHandle: Send + Sync + Sized {
     async fn begin<'a>(&'a mut self) -> Result<Transaction<&'a mut Self>, Error>;
     async fn lock_all<'a>(
         &'a mut self,
-        locks: Vec<bulk_locks::LockTargetId>,
+        locks: impl IntoIterator<Item = bulk_locks::LockTargetId> + Send + Sync + Clone + 'a,
     ) -> Result<bulk_locks::Verifier, Error>;
     fn id(&self) -> HandleId;
     fn rebase(&mut self) -> Result<(), Error>;
@@ -187,7 +187,7 @@ impl<Handle: DbHandle + ?Sized> DbHandle for &mut Handle {
 
     async fn lock_all<'a>(
         &'a mut self,
-        locks: Vec<bulk_locks::LockTargetId>,
+        locks: impl IntoIterator<Item = bulk_locks::LockTargetId> + Send + Sync + Clone + 'a,
     ) -> Result<bulk_locks::Verifier, Error> {
         (*self).lock_all(locks).await
     }
@@ -308,14 +308,15 @@ impl DbHandle for PatchDbHandle {
 
     async fn lock_all<'a>(
         &'a mut self,
-        locks: Vec<bulk_locks::LockTargetId>,
+        locks: impl IntoIterator<Item = bulk_locks::LockTargetId> + Send + Sync + Clone + 'a,
     ) -> Result<bulk_locks::Verifier, Error> {
-        let skeleton_key = Verifier {
-            target_locks: locks.iter().cloned().collect(),
+        let verifier = Verifier {
+            target_locks: locks.clone().into_iter().collect(),
         };
-        self.locks
-            .push(self.db.locker.lock_all(self.id.clone(), locks).await?);
-        Ok(skeleton_key)
+        let guard = self.db.locker.lock_all(&self.id, locks).await?;
+
+        self.locks.push(guard);
+        Ok(verifier)
     }
 }
 
@@ -410,10 +411,10 @@ pub mod test_utils {
 
         async fn lock_all<'a>(
             &'a mut self,
-            locks: Vec<bulk_locks::LockTargetId>,
+            locks: impl IntoIterator<Item = bulk_locks::LockTargetId> + Send + Sync + Clone + 'a,
         ) -> Result<bulk_locks::Verifier, Error> {
             let skeleton_key = Verifier {
-                target_locks: locks.iter().cloned().collect(),
+                target_locks: locks.into_iter().collect(),
             };
             Ok(skeleton_key)
         }
