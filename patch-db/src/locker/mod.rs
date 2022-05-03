@@ -15,7 +15,7 @@ use tracing::{debug, trace, warn};
 
 use self::action_mux::ActionMux;
 use self::bookkeeper::LockBookkeeper;
-use crate::{bulk_locks::LockTargetId, locker::action_mux::Action};
+use crate::{bulk_locks::LockTargetId, locker::action_mux::Action, Verifier};
 use crate::{handle::HandleId, JsonGlob};
 
 pub struct Locker {
@@ -89,30 +89,26 @@ impl Locker {
 
     pub async fn lock_all(
         &self,
-        handle_id: HandleId,
-        locks: Vec<LockTargetId>,
-    ) -> Result<Guard, LockError> {
-        // Pertinent Logic
-        let lock_info: LockInfos = LockInfos(
-            locks
-                .into_iter()
-                .zip(std::iter::repeat(handle_id))
-                .map(
-                    |(
-                        LockTargetId {
-                            glob: paths,
-                            lock_type,
-                        },
-                        handle_id,
-                    )| LockInfo {
-                        handle_id,
-                        ptr: paths,
-                        ty: lock_type,
-                    },
-                )
-                .collect(),
-        );
-        self._lock(lock_info).await
+        handle_id: &HandleId,
+        locks: impl IntoIterator<Item = LockTargetId> + Send,
+    ) -> Result<(Verifier, Guard), LockError> {
+        let mut verifier = Verifier {
+            target_locks: Default::default(),
+        };
+        let mut lock_infos = LockInfos(Default::default());
+
+        for target_id in locks {
+            let lock_info = LockInfo {
+                handle_id: handle_id.clone(),
+                ptr: target_id.glob.clone(),
+                ty: target_id.lock_type,
+            };
+            verifier.target_locks.insert(target_id);
+            lock_infos.0.push(lock_info);
+        }
+
+        let guard = self._lock(lock_infos).await?;
+        Ok((verifier, guard))
     }
     async fn _lock(&self, lock_info: LockInfos) -> Result<Guard, LockError> {
         let (send, recv) = oneshot::channel();
