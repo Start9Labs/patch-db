@@ -209,17 +209,13 @@ impl<Parent: DbHandle + Send + Sync> DbHandle for Transaction<Parent> {
 
     async fn lock_all<'a>(
         &'a mut self,
-        locks: Vec<crate::bulk_locks::LockTargetId>,
+        locks: impl IntoIterator<Item = crate::LockTargetId> + Send + Clone + 'a,
     ) -> Result<crate::bulk_locks::Verifier, Error> {
         let verifier = Verifier {
-            target_locks: locks.iter().cloned().collect(),
+            target_locks: locks.clone().into_iter().collect(),
         };
-        self.locks.push(
-            self.parent
-                .locker()
-                .lock_all(self.id.clone(), locks)
-                .await?,
-        );
+        self.locks
+            .push(self.parent.locker().lock_all(&self.id, locks).await?);
         Ok(verifier)
     }
 }

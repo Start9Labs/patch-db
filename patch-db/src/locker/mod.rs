@@ -91,24 +91,25 @@ impl Locker {
         &self,
         handle_id: &HandleId,
         locks: impl IntoIterator<Item = LockTargetId> + Send,
-    ) -> Result<(Verifier, Guard), LockError> {
-        let mut verifier = Verifier {
-            target_locks: Default::default(),
-        };
-        let mut lock_infos = LockInfos(Default::default());
-
-        for target_id in locks {
-            let lock_info = LockInfo {
-                handle_id: handle_id.clone(),
-                ptr: target_id.glob.clone(),
-                ty: target_id.lock_type,
-            };
-            verifier.target_locks.insert(target_id);
-            lock_infos.0.push(lock_info);
-        }
-
-        let guard = self._lock(lock_infos).await?;
-        Ok((verifier, guard))
+    ) -> Result<Guard, LockError> {
+        let lock_infos = LockInfos(
+            locks
+                .into_iter()
+                .map(
+                    |LockTargetId {
+                         glob: ptr,
+                         lock_type: ty,
+                     }| {
+                        LockInfo {
+                            handle_id: handle_id.clone(),
+                            ptr,
+                            ty,
+                        }
+                    },
+                )
+                .collect(),
+        );
+        self._lock(lock_infos).await
     }
     async fn _lock(&self, lock_info: LockInfos) -> Result<Guard, LockError> {
         let (send, recv) = oneshot::channel();
