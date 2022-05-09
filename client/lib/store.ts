@@ -5,7 +5,7 @@ import BTree from 'sorted-btree'
 
 export interface StashEntry {
   revision: Revision
-  undo: Operation[]
+  undo: Operation<unknown>[]
 }
 
 export class Store<T extends { [key: string]: any }> {
@@ -95,7 +95,7 @@ export class Store<T extends { [key: string]: any }> {
   private applyRevisions (id: number): void {
     let revision = this.stash.get(id)?.revision
     while (revision) {
-      let undo: Operation[] = []
+      let undo: Operation<unknown>[] = []
       let success = false
 
       try {

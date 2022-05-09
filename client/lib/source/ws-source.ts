@@ -43,14 +43,6 @@ export interface RPCError extends RPCBase {
 }
 export type RPCResponse<T> = RPCSuccess<T> | RPCError
 
-function isRpcError<Error, Result> (arg: { error: Error } | { result: Result}): arg is { error: Error } {
-  return !!(arg as any).error
-}
-
-function isRpcSuccess<Error, Result> (arg: { error: Error } | { result: Result}): arg is { result: Result } {
-  return !!(arg as any).result
-}
-
 class RpcError {
   code: number
   message: string

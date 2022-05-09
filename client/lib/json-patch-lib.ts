@@ -1,9 +1,5 @@
 import { DBCache, PatchOp } from './types'
 
-export interface Validator<T> {
-  (operation: Operation, index: number, doc: T, existingPathFragment: string): void
-}
-
 export interface BaseOperation {
   path: string
 }
@@ -15,7 +11,6 @@ export interface AddOperation<T> extends BaseOperation {
 
 export interface RemoveOperation extends BaseOperation {
   op: PatchOp.REMOVE
-  value?: undefined
 }
 
 export interface ReplaceOperation<T> extends BaseOperation {
@@ -23,25 +18,28 @@ export interface ReplaceOperation<T> extends BaseOperation {
   value: T
 }
 
-export type Operation = AddOperation<any> | RemoveOperation | ReplaceOperation<any>
+export type Operation<T> = AddOperation<T> | RemoveOperation | ReplaceOperation<T>
 
-export function getValueByPointer (doc: Record<string, any>, pointer: string): any {
-  if (pointer === '/') return doc
+export function getValueByPointer<T extends Record<string, T>> (data: T, pointer: string): any {
+  if (pointer === '/') return data
 
   try {
-    return pointer.split('/').slice(1).reduce((acc, next) => acc[next], doc)
+    return jsonPathToKeyArray(pointer).reduce((acc, next) => acc[next], data)
   } catch (e) {
     return undefined
   }
 }
 
-export function applyOperation (doc: DBCache<Record<string, any>>, { path, op, value }: Operation): Operation | null {
+export function applyOperation<T> (
+  doc: DBCache<Record<string, any>>,
+  { path, op, value }: Operation<T> & { value?: T },
+): Operation<T> | null {
   const current = getValueByPointer(doc.data, path)
   const remove = { op: PatchOp.REMOVE, path} as const
   const add = { op: PatchOp.ADD, path, value: current} as const
   const replace = { op: PatchOp.REPLACE, path, value: current } as const
 
-  doc.data = recursiveApply(doc.data, path.split('/').slice(1), value)
+  doc.data = recursiveApply(doc.data, jsonPathToKeyArray(path), value)
 
   switch (op) {
     case PatchOp.REMOVE:
@@ -76,8 +74,12 @@ function recursiveApply<T extends Record<string, T>> (data: T, path: readonly st
   return result
 }
 
-function isObject (val: any): val is Record<string, any> {
+function isObject (val: any): val is Record<string, unknown> {
   return typeof val === 'object' && !Array.isArray(val) && val !== null
+}
+
+function jsonPathToKeyArray (path: string): string[] {
+  return path.split('/').slice(1)
 }
 
 
