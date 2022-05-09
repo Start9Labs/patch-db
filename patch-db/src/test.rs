@@ -109,8 +109,8 @@ async fn locks_dropped_from_enforcer_on_tx_save() {
     let mut tx = handle.begin().await.unwrap();
     let ptr_a: JsonPointer = "/a".parse().unwrap();
     let ptr_b: JsonPointer = "/b".parse().unwrap();
-    tx.lock(ptr_b, LockType::Write).await.unwrap();
+    tx.lock(ptr_b.into(), LockType::Write).await.unwrap();
     tx.save().await.unwrap();
-    handle.lock(ptr_a, LockType::Write).await.unwrap();
+    handle.lock(ptr_a.into(), LockType::Write).await.unwrap();
     cleanup_db("test.db").await;
 }

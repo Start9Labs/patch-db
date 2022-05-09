@@ -9,10 +9,13 @@ use tokio::sync::broadcast::error::TryRecvError;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-use crate::handle::HandleId;
-use crate::locker::{Guard, LockType, Locker};
 use crate::patch::{DiffPatch, Revision};
 use crate::store::Store;
+use crate::{
+    bulk_locks::Verifier,
+    locker::{Guard, LockType, Locker},
+};
+use crate::{handle::HandleId, model_paths::JsonGlob};
 use crate::{DbHandle, Error, PatchDbHandle};
 
 pub struct Transaction<Parent: DbHandle> {
@@ -165,13 +168,14 @@ impl<Parent: DbHandle + Send + Sync> DbHandle for Transaction<Parent> {
         self.updates.append(patch);
         Ok(None)
     }
-    async fn lock(&mut self, ptr: JsonPointer, lock_type: LockType) -> Result<(), Error> {
-        Ok(self.locks.push(
+    async fn lock(&mut self, ptr: JsonGlob, lock_type: LockType) -> Result<(), Error> {
+        self.locks.push(
             self.parent
                 .locker()
                 .lock(self.id.clone(), ptr, lock_type)
                 .await?,
-        ))
+        );
+        Ok(())
     }
     async fn get<
         T: for<'de> Deserialize<'de>,
@@ -201,5 +205,17 @@ impl<Parent: DbHandle + Send + Sync> DbHandle for Transaction<Parent> {
     ) -> Result<Option<Arc<Revision>>, Error> {
         self.updates.append(patch);
         Ok(None)
+    }
+
+    async fn lock_all<'a>(
+        &'a mut self,
+        locks: impl IntoIterator<Item = crate::LockTargetId> + Send + Clone + 'a,
+    ) -> Result<crate::bulk_locks::Verifier, Error> {
+        let verifier = Verifier {
+            target_locks: locks.clone().into_iter().collect(),
+        };
+        self.locks
+            .push(self.parent.locker().lock_all(&self.id, locks).await?);
+        Ok(verifier)
     }
 }

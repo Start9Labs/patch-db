@@ -9,7 +9,11 @@ use json_ptr::JsonPointer;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::locker::LockType;
+use crate::{
+    bulk_locks::{self, unsaturated_args::AsUnsaturatedArgs, LockTarget},
+    locker::LockType,
+    model_paths::JsonGlob,
+};
 use crate::{DbHandle, DiffPatch, Error, Revision};
 
 #[derive(Debug)]
@@ -55,44 +59,89 @@ impl<T: Serialize + for<'de> Deserialize<'de>> DerefMut for ModelDataMut<T> {
         &mut self.current
     }
 }
-
 #[derive(Debug)]
 pub struct Model<T: Serialize + for<'de> Deserialize<'de>> {
-    ptr: JsonPointer,
+    pub(crate) path: JsonGlob,
     phantom: PhantomData<T>,
 }
+
+lazy_static::lazy_static!(
+    static ref EMPTY_JSON: JsonPointer = JsonPointer::default();
+);
+
 impl<T> Model<T>
 where
     T: Serialize + for<'de> Deserialize<'de>,
 {
     pub async fn lock<Db: DbHandle>(&self, db: &mut Db, lock_type: LockType) -> Result<(), Error> {
-        Ok(db.lock(self.ptr.clone(), lock_type).await?)
+        Ok(db.lock(self.json_ptr().clone().into(), lock_type).await?)
     }
 
     pub async fn get<Db: DbHandle>(&self, db: &mut Db, lock: bool) -> Result<ModelData<T>, Error> {
         if lock {
             self.lock(db, LockType::Read).await?;
         }
-        Ok(ModelData(db.get(&self.ptr).await?))
+        Ok(ModelData(db.get(self.json_ptr()).await?))
     }
 
     pub async fn get_mut<Db: DbHandle>(&self, db: &mut Db) -> Result<ModelDataMut<T>, Error> {
         self.lock(db, LockType::Write).await?;
-        let original = db.get_value(&self.ptr, None).await?;
+        let original = db.get_value(self.json_ptr(), None).await?;
         let current = serde_json::from_value(original.clone())?;
         Ok(ModelDataMut {
             original,
             current,
-            ptr: self.ptr.clone(),
+            ptr: self.json_ptr().clone(),
         })
     }
-
+    /// Used for times of Serialization, or when going into the db
+    fn json_ptr(&self) -> &JsonPointer {
+        match self.path {
+            JsonGlob::Path(ref ptr) => ptr,
+            JsonGlob::PathWithStar { .. } => {
+                #[cfg(feature = "tracing")]
+                tracing::error!("Should be unreachable, since the type of () means that the paths is always Paths");
+                &*EMPTY_JSON
+            }
+        }
+    }
+}
+impl<T> Model<T>
+where
+    T: Serialize + for<'de> Deserialize<'de>,
+{
     pub fn child<C: Serialize + for<'de> Deserialize<'de>>(self, index: &str) -> Model<C> {
-        let mut ptr = self.ptr;
-        ptr.push_end(index);
+        let path = self.path.append(index.parse().unwrap_or_else(|_e| {
+            #[cfg(feature = "trace")]
+            tracing::error!("Shouldn't ever not be able to parse a path");
+            Default::default()
+        }));
         Model {
-            ptr,
+            path,
             phantom: PhantomData,
+        }
+    }
+
+    /// One use is gettign the modelPaths for the bulk locks
+    pub fn model_paths(&self) -> &JsonGlob {
+        &self.path
+    }
+}
+
+impl<T> Model<T>
+where
+    T: Serialize + for<'de> Deserialize<'de>,
+{
+    /// Used to create a lock for the db
+    pub fn make_locker<SB>(&self, lock_type: LockType) -> LockTarget<T, SB>
+    where
+        JsonGlob: AsUnsaturatedArgs<SB>,
+    {
+        bulk_locks::LockTarget {
+            lock_type,
+            db_type: self.phantom,
+            _star_binds: self.path.as_unsaturated_args(),
+            glob: self.path.clone(),
         }
     }
 }
@@ -106,7 +155,7 @@ where
         value: &T,
     ) -> Result<Option<Arc<Revision>>, Error> {
         self.lock(db, LockType::Write).await?;
-        db.put(&self.ptr, value).await
+        db.put(self.json_ptr(), value).await
     }
 }
 impl<T> From<JsonPointer> for Model<T>
@@ -115,7 +164,18 @@ where
 {
     fn from(ptr: JsonPointer) -> Self {
         Self {
-            ptr,
+            path: JsonGlob::Path(ptr),
+            phantom: PhantomData,
+        }
+    }
+}
+impl<T> From<JsonGlob> for Model<T>
+where
+    T: Serialize + for<'de> Deserialize<'de>,
+{
+    fn from(ptr: JsonGlob) -> Self {
+        Self {
+            path: ptr,
             phantom: PhantomData,
         }
     }
@@ -125,7 +185,7 @@ where
     T: Serialize + for<'de> Deserialize<'de>,
 {
     fn as_ref(&self) -> &JsonPointer {
-        &self.ptr
+        self.json_ptr()
     }
 }
 impl<T> From<Model<T>> for JsonPointer
@@ -133,7 +193,15 @@ where
     T: Serialize + for<'de> Deserialize<'de>,
 {
     fn from(model: Model<T>) -> Self {
-        model.ptr
+        model.json_ptr().clone()
+    }
+}
+impl<T> From<Model<T>> for JsonGlob
+where
+    T: Serialize + for<'de> Deserialize<'de>,
+{
+    fn from(model: Model<T>) -> Self {
+        model.path
     }
 }
 impl<T> std::clone::Clone for Model<T>
@@ -142,7 +210,7 @@ where
 {
     fn clone(&self) -> Self {
         Model {
-            ptr: self.ptr.clone(),
+            path: self.path.clone(),
             phantom: PhantomData,
         }
     }
@@ -153,12 +221,24 @@ pub trait HasModel: Serialize + for<'de> Deserialize<'de> {
 }
 
 pub trait ModelFor<T: Serialize + for<'de> Deserialize<'de>>:
-    From<JsonPointer> + AsRef<JsonPointer> + Into<JsonPointer> + From<Model<T>> + Clone
+    From<JsonPointer>
+    + From<JsonGlob>
+    + AsRef<JsonPointer>
+    + Into<JsonPointer>
+    + From<Model<T>>
+    + Clone
+    + Into<JsonGlob>
 {
 }
 impl<
         T: Serialize + for<'de> Deserialize<'de>,
-        U: From<JsonPointer> + AsRef<JsonPointer> + Into<JsonPointer> + From<Model<T>> + Clone,
+        U: From<JsonPointer>
+            + From<JsonGlob>
+            + AsRef<JsonPointer>
+            + Into<JsonPointer>
+            + From<Model<T>>
+            + Clone
+            + Into<JsonGlob>,
     > ModelFor<T> for U
 {
 }
@@ -167,6 +247,7 @@ macro_rules! impl_simple_has_model {
     ($($ty:ty),*) => {
         $(
             impl HasModel for $ty {
+
                 type Model = Model<$ty>;
             }
         )*
@@ -208,7 +289,17 @@ impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> From<JsonPointer> for 
         BoxModel(T::Model::from(ptr))
     }
 }
+impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> From<JsonGlob> for BoxModel<T> {
+    fn from(ptr: JsonGlob) -> Self {
+        BoxModel(T::Model::from(ptr))
+    }
+}
 impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> From<BoxModel<T>> for JsonPointer {
+    fn from(model: BoxModel<T>) -> Self {
+        model.0.into()
+    }
+}
+impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> From<BoxModel<T>> for JsonGlob {
     fn from(model: BoxModel<T>) -> Self {
         model.0.into()
     }
@@ -229,7 +320,7 @@ impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> HasModel for Box<T> {
 pub struct OptionModel<T: HasModel + Serialize + for<'de> Deserialize<'de>>(T::Model);
 impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> OptionModel<T> {
     pub async fn lock<Db: DbHandle>(&self, db: &mut Db, lock_type: LockType) -> Result<(), Error> {
-        Ok(db.lock(self.0.as_ref().clone(), lock_type).await?)
+        Ok(db.lock(self.0.as_ref().clone().into(), lock_type).await?)
     }
 
     pub async fn get<Db: DbHandle>(
@@ -259,9 +350,10 @@ impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> OptionModel<T> {
 
     pub async fn exists<Db: DbHandle>(&self, db: &mut Db, lock: bool) -> Result<bool, Error> {
         if lock {
-            db.lock(self.0.as_ref().clone(), LockType::Exist).await?;
+            db.lock(self.0.as_ref().clone().into(), LockType::Exist)
+                .await?;
         }
-        Ok(db.exists(&self.as_ref(), None).await?)
+        Ok(db.exists(self.as_ref(), None).await?)
     }
 
     pub fn map<
@@ -285,8 +377,28 @@ impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> OptionModel<T> {
     }
 
     pub async fn delete<Db: DbHandle>(&self, db: &mut Db) -> Result<Option<Arc<Revision>>, Error> {
-        db.lock(self.as_ref().clone(), LockType::Write).await?;
+        db.lock(self.as_ref().clone().into(), LockType::Write)
+            .await?;
         db.put(self.as_ref(), &Value::Null).await
+    }
+}
+
+impl<T> OptionModel<T>
+where
+    T: HasModel,
+{
+    /// Used to create a lock for the db
+    pub fn make_locker<SB>(self, lock_type: LockType) -> LockTarget<T, SB>
+    where
+        JsonGlob: AsUnsaturatedArgs<SB>,
+    {
+        let paths: JsonGlob = self.into();
+        bulk_locks::LockTarget {
+            _star_binds: paths.as_unsaturated_args(),
+            glob: paths,
+            lock_type,
+            db_type: PhantomData,
+        }
     }
 }
 impl<T> OptionModel<T>
@@ -319,7 +431,8 @@ where
         db: &mut Db,
         value: &T,
     ) -> Result<Option<Arc<Revision>>, Error> {
-        db.lock(self.as_ref().clone(), LockType::Write).await?;
+        db.lock(self.as_ref().clone().into(), LockType::Write)
+            .await?;
         db.put(self.as_ref(), value).await
     }
 }
@@ -327,7 +440,7 @@ impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> From<Model<Option<T>>>
     for OptionModel<T>
 {
     fn from(model: Model<Option<T>>) -> Self {
-        OptionModel(T::Model::from(JsonPointer::from(model)))
+        OptionModel(T::Model::from(JsonGlob::from(model)))
     }
 }
 impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> From<JsonPointer> for OptionModel<T> {
@@ -335,7 +448,17 @@ impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> From<JsonPointer> for 
         OptionModel(T::Model::from(ptr))
     }
 }
+impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> From<JsonGlob> for OptionModel<T> {
+    fn from(ptr: JsonGlob) -> Self {
+        OptionModel(T::Model::from(ptr))
+    }
+}
 impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> From<OptionModel<T>> for JsonPointer {
+    fn from(model: OptionModel<T>) -> Self {
+        model.0.into()
+    }
+}
+impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> From<OptionModel<T>> for JsonGlob {
     fn from(model: OptionModel<T>) -> Self {
         model.0.into()
     }
@@ -382,7 +505,7 @@ impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> VecModel<T> {
 }
 impl<T: Serialize + for<'de> Deserialize<'de>> From<Model<Vec<T>>> for VecModel<T> {
     fn from(model: Model<Vec<T>>) -> Self {
-        VecModel(From::from(JsonPointer::from(model)))
+        VecModel(From::from(JsonGlob::from(model)))
     }
 }
 impl<T: Serialize + for<'de> Deserialize<'de>> From<JsonPointer> for VecModel<T> {
@@ -390,7 +513,17 @@ impl<T: Serialize + for<'de> Deserialize<'de>> From<JsonPointer> for VecModel<T>
         VecModel(From::from(ptr))
     }
 }
+impl<T: Serialize + for<'de> Deserialize<'de>> From<JsonGlob> for VecModel<T> {
+    fn from(ptr: JsonGlob) -> Self {
+        VecModel(From::from(ptr))
+    }
+}
 impl<T: Serialize + for<'de> Deserialize<'de>> From<VecModel<T>> for JsonPointer {
+    fn from(model: VecModel<T>) -> Self {
+        model.0.into()
+    }
+}
+impl<T: Serialize + for<'de> Deserialize<'de>> From<VecModel<T>> for JsonGlob {
     fn from(model: VecModel<T>) -> Self {
         model.0.into()
     }
@@ -490,16 +623,18 @@ where
         lock: bool,
     ) -> Result<BTreeSet<T::Key>, Error> {
         if lock {
-            db.lock(self.as_ref().clone(), LockType::Exist).await?;
+            db.lock(self.json_ptr().clone().into(), LockType::Exist)
+                .await?;
         }
-        let set = db.keys(self.as_ref(), None).await?;
+        let set = db.keys(self.json_ptr(), None).await?;
         Ok(set
             .into_iter()
             .map(|s| serde_json::from_value(Value::String(s)))
             .collect::<Result<_, _>>()?)
     }
     pub async fn remove<Db: DbHandle>(&self, db: &mut Db, key: &T::Key) -> Result<(), Error> {
-        db.lock(self.as_ref().clone(), LockType::Write).await?;
+        db.lock(self.as_ref().clone().into(), LockType::Write)
+            .await?;
         if db.exists(self.clone().idx(key).as_ref(), None).await? {
             db.apply(
                 DiffPatch(Patch(vec![PatchOperation::Remove(RemoveOperation {
@@ -521,6 +656,22 @@ where
         self.0.child(idx.as_ref()).into()
     }
 }
+
+impl<T> MapModel<T>
+where
+    T: Serialize + for<'de> Deserialize<'de> + Map,
+    T::Value: Serialize + for<'de> Deserialize<'de> + HasModel,
+{
+    /// Used when mapping across all possible paths of a map or such, to later be filled
+    pub fn star(self) -> <<T as Map>::Value as HasModel>::Model {
+        let path = self.0.path.append(JsonGlob::star());
+        Model {
+            path,
+            phantom: PhantomData,
+        }
+        .into()
+    }
+}
 impl<T> From<Model<T>> for MapModel<T>
 where
     T: Serialize + for<'de> Deserialize<'de> + Map,
@@ -539,7 +690,25 @@ where
         MapModel(From::from(ptr))
     }
 }
+impl<T> From<JsonGlob> for MapModel<T>
+where
+    T: Serialize + for<'de> Deserialize<'de> + Map,
+    T::Value: Serialize + for<'de> Deserialize<'de>,
+{
+    fn from(ptr: JsonGlob) -> Self {
+        MapModel(From::from(ptr))
+    }
+}
 impl<T> From<MapModel<T>> for JsonPointer
+where
+    T: Serialize + for<'de> Deserialize<'de> + Map,
+    T::Value: Serialize + for<'de> Deserialize<'de>,
+{
+    fn from(model: MapModel<T>) -> Self {
+        model.0.into()
+    }
+}
+impl<T> From<MapModel<T>> for JsonGlob
 where
     T: Serialize + for<'de> Deserialize<'de> + Map,
     T::Value: Serialize + for<'de> Deserialize<'de>,

@@ -101,159 +101,176 @@ fn build_model_struct(
                             _ => None,
                         });
 
-                    child_path.push(Some(
-                        match (serde_rename, serde_rename_all.as_ref().map(|s| s.as_str())) {
-                            (Some(a), _) => a,
-                            (None, Some("lowercase")) => LitStr::new(
-                                &heck::CamelCase::to_camel_case(ident.to_string().as_str())
-                                    .to_lowercase(),
-                                ident.span(),
+                    child_path.push(Some(match (serde_rename, serde_rename_all.as_deref()) {
+                        (Some(a), _) => a,
+                        (None, Some("lowercase")) => LitStr::new(
+                            &heck::CamelCase::to_camel_case(ident.to_string().as_str())
+                                .to_lowercase(),
+                            ident.span(),
+                        ),
+                        (None, Some("UPPERCASE")) => LitStr::new(
+                            &heck::CamelCase::to_camel_case(ident.to_string().as_str())
+                                .to_uppercase(),
+                            ident.span(),
+                        ),
+                        (None, Some("PascalCase")) => LitStr::new(
+                            &heck::CamelCase::to_camel_case(ident.to_string().as_str()),
+                            ident.span(),
+                        ),
+                        (None, Some("camelCase")) => LitStr::new(
+                            &heck::MixedCase::to_mixed_case(ident.to_string().as_str()),
+                            ident.span(),
+                        ),
+                        (None, Some("SCREAMING_SNAKE_CASE")) => LitStr::new(
+                            &heck::ShoutySnakeCase::to_shouty_snake_case(
+                                ident.to_string().as_str(),
                             ),
-                            (None, Some("UPPERCASE")) => LitStr::new(
-                                &heck::CamelCase::to_camel_case(ident.to_string().as_str())
-                                    .to_uppercase(),
-                                ident.span(),
+                            ident.span(),
+                        ),
+                        (None, Some("kebab-case")) => LitStr::new(
+                            &heck::KebabCase::to_kebab_case(ident.to_string().as_str()),
+                            ident.span(),
+                        ),
+                        (None, Some("SCREAMING-KEBAB-CASE")) => LitStr::new(
+                            &heck::ShoutyKebabCase::to_shouty_kebab_case(
+                                ident.to_string().as_str(),
                             ),
-                            (None, Some("PascalCase")) => LitStr::new(
-                                &heck::CamelCase::to_camel_case(ident.to_string().as_str()),
-                                ident.span(),
-                            ),
-                            (None, Some("camelCase")) => LitStr::new(
-                                &heck::MixedCase::to_mixed_case(ident.to_string().as_str()),
-                                ident.span(),
-                            ),
-                            (None, Some("SCREAMING_SNAKE_CASE")) => LitStr::new(
-                                &heck::ShoutySnakeCase::to_shouty_snake_case(
-                                    ident.to_string().as_str(),
-                                ),
-                                ident.span(),
-                            ),
-                            (None, Some("kebab-case")) => LitStr::new(
-                                &heck::KebabCase::to_kebab_case(ident.to_string().as_str()),
-                                ident.span(),
-                            ),
-                            (None, Some("SCREAMING-KEBAB-CASE")) => LitStr::new(
-                                &heck::ShoutyKebabCase::to_shouty_kebab_case(
-                                    ident.to_string().as_str(),
-                                ),
-                                ident.span(),
-                            ),
-                            _ => LitStr::new(&ident.to_string(), ident.span()),
-                        },
-                    ));
+                            ident.span(),
+                        ),
+                        _ => LitStr::new(&ident.to_string(), ident.span()),
+                    }));
                 }
             }
         }
-        Fields::Unnamed(f) => {
-            if f.unnamed.len() == 1 {
-                // newtype wrapper
-                let field = &f.unnamed[0];
+        Fields::Unnamed(f) if f.unnamed.len() == 1 => {
+            // newtype wrapper
+            let field = &f.unnamed[0];
+            let ty = &field.ty;
+            let inner_model: Type = if let Some(child_model_name) = field
+                .attrs
+                .iter()
+                .filter(|attr| attr.path.is_ident("model"))
+                .map(|attr| attr.parse_args::<MetaNameValue>().unwrap())
+                .filter(|nv| nv.path.is_ident("name"))
+                .find_map(|nv| match nv.lit {
+                    Lit::Str(s) => Some(s),
+                    _ => None,
+                }) {
+                let child_model_ty = Ident::new(&child_model_name.value(), child_model_name.span());
+                syn::parse2(quote! { #child_model_ty }).unwrap()
+            } else if field.attrs.iter().any(|attr| attr.path.is_ident("model")) {
+                syn::parse2(quote! { <#ty as patch_db::HasModel>::Model }).unwrap()
+            } else {
+                syn::parse2(quote! { patch_db::Model::<#ty> }).unwrap()
+            };
+            let result = quote! {
+                #[derive(Debug)]
+                #model_vis struct #model_name(#inner_model);
+                impl #model_name {
+                    pub fn into_model(self) -> patch_db::Model<#base_name> {
+                        self.into()
+                    }
+                }
+                impl std::clone::Clone for #model_name {
+                    fn clone(&self) -> Self {
+                        #model_name(self.0.clone())
+                    }
+                }
+                impl core::ops::Deref for #model_name {
+                    type Target = #inner_model;
+                    fn deref(&self) -> &Self::Target {
+                        &self.0
+                    }
+                }
+                impl core::ops::DerefMut for #model_name {
+                    fn deref_mut(&mut self) -> &mut Self::Target {
+                        &mut self.0
+                    }
+                }
+                impl From<patch_db::json_ptr::JsonPointer> for #model_name {
+                    fn from(ptr: patch_db::json_ptr::JsonPointer) -> Self {
+                        #model_name(#inner_model::from(ptr))
+                    }
+                }
+                impl From<patch_db::JsonGlob> for #model_name {
+                    fn from(ptr: patch_db::JsonGlob) -> Self {
+                        #model_name(#inner_model::from(ptr))
+                    }
+                }
+                impl From<#model_name> for patch_db::Model<#base_name> {
+                    fn from(model: #model_name) -> Self {
+                        patch_db::Model::from(patch_db::JsonGlob::from(model))
+                    }
+                }
+                impl From<#model_name> for patch_db::json_ptr::JsonPointer {
+                    fn from(model: #model_name) -> Self {
+                        model.0.into()
+                    }
+                }
+                impl From<#model_name> for patch_db::JsonGlob {
+                    fn from(model: #model_name) -> Self {
+                        model.0.into()
+                    }
+                }
+                impl AsRef<patch_db::json_ptr::JsonPointer> for #model_name {
+                    fn as_ref(&self) -> &patch_db::json_ptr::JsonPointer {
+                        self.0.as_ref()
+                    }
+                }
+                impl From<patch_db::Model<#base_name>> for #model_name {
+                    fn from(model: patch_db::Model<#base_name>) -> Self {
+                        #model_name(#inner_model::from(patch_db::json_ptr::JsonPointer::from(model)))
+                    }
+                }
+                impl From<#inner_model> for #model_name {
+                    fn from(model: #inner_model) -> Self {
+                        #model_name(model)
+                    }
+                }
+                impl patch_db::HasModel for #base_name {
+                    type Model = #model_name;
+                }
+            };
+            // panic!("{}", result);
+            return result;
+        }
+        Fields::Unnamed(f) if f.unnamed.len() > 1 => {
+            for (i, field) in f.unnamed.iter().enumerate() {
+                child_fn_name.push(Ident::new(
+                    &format!("idx_{}", i),
+                    proc_macro2::Span::call_site(),
+                ));
                 let ty = &field.ty;
-                let inner_model: Type = if let Some(child_model_name) = field
+                if let Some(child_model_name) = field
                     .attrs
                     .iter()
                     .filter(|attr| attr.path.is_ident("model"))
-                    .filter_map(|attr| Some(attr.parse_args::<MetaNameValue>().unwrap()))
+                    .map(|attr| attr.parse_args::<MetaNameValue>().unwrap())
                     .filter(|nv| nv.path.is_ident("name"))
                     .find_map(|nv| match nv.lit {
                         Lit::Str(s) => Some(s),
                         _ => None,
-                    }) {
+                    })
+                {
                     let child_model_ty =
                         Ident::new(&child_model_name.value(), child_model_name.span());
-                    syn::parse2(quote! { #child_model_ty }).unwrap()
+                    child_model
+                        .push(syn::parse2(quote! { #child_model_ty }).expect("invalid model name"));
                 } else if field.attrs.iter().any(|attr| attr.path.is_ident("model")) {
-                    syn::parse2(quote! { <#ty as patch_db::HasModel>::Model }).unwrap()
+                    child_model
+                        .push(syn::parse2(quote! { <#ty as patch_db::HasModel>::Model }).unwrap());
                 } else {
-                    syn::parse2(quote! { patch_db::Model::<#ty> }).unwrap()
-                };
-                return quote! {
-                    #[derive(Debug)]
-                    #model_vis struct #model_name(#inner_model);
-                    impl std::clone::Clone for #model_name {
-                        fn clone(&self) -> Self {
-                            #model_name(self.0.clone())
-                        }
-                    }
-                    impl core::ops::Deref for #model_name {
-                        type Target = #inner_model;
-                        fn deref(&self) -> &Self::Target {
-                            &self.0
-                        }
-                    }
-                    impl core::ops::DerefMut for #model_name {
-                        fn deref_mut(&mut self) -> &mut Self::Target {
-                            &mut self.0
-                        }
-                    }
-                    impl From<patch_db::json_ptr::JsonPointer> for #model_name {
-                        fn from(ptr: patch_db::json_ptr::JsonPointer) -> Self {
-                            #model_name(#inner_model::from(ptr))
-                        }
-                    }
-                    impl From<#model_name> for patch_db::json_ptr::JsonPointer {
-                        fn from(model: #model_name) -> Self {
-                            model.0.into()
-                        }
-                    }
-                    impl AsRef<patch_db::json_ptr::JsonPointer> for #model_name {
-                        fn as_ref(&self) -> &patch_db::json_ptr::JsonPointer {
-                            self.0.as_ref()
-                        }
-                    }
-                    impl From<patch_db::Model<#base_name>> for #model_name {
-                        fn from(model: patch_db::Model<#base_name>) -> Self {
-                            #model_name(#inner_model::from(patch_db::json_ptr::JsonPointer::from(model)))
-                        }
-                    }
-                    impl From<#inner_model> for #model_name {
-                        fn from(model: #inner_model) -> Self {
-                            #model_name(model)
-                        }
-                    }
-                    impl patch_db::HasModel for #base_name {
-                        type Model = #model_name;
-                    }
-                };
-            } else if f.unnamed.len() > 1 {
-                for (i, field) in f.unnamed.iter().enumerate() {
-                    child_fn_name.push(Ident::new(
-                        &format!("idx_{}", i),
-                        proc_macro2::Span::call_site(),
-                    ));
-                    let ty = &field.ty;
-                    if let Some(child_model_name) = field
-                        .attrs
-                        .iter()
-                        .filter(|attr| attr.path.is_ident("model"))
-                        .filter_map(|attr| Some(attr.parse_args::<MetaNameValue>().unwrap()))
-                        .filter(|nv| nv.path.is_ident("name"))
-                        .find_map(|nv| match nv.lit {
-                            Lit::Str(s) => Some(s),
-                            _ => None,
-                        })
-                    {
-                        let child_model_ty =
-                            Ident::new(&child_model_name.value(), child_model_name.span());
-                        child_model.push(
-                            syn::parse2(quote! { #child_model_ty }).expect("invalid model name"),
-                        );
-                    } else if field.attrs.iter().any(|attr| attr.path.is_ident("model")) {
-                        child_model.push(
-                            syn::parse2(quote! { <#ty as patch_db::HasModel>::Model }).unwrap(),
-                        );
-                    } else {
-                        child_model.push(syn::parse2(quote! { patch_db::Model<#ty> }).unwrap());
-                    }
-                    // TODO: serde rename for tuple structs?
-                    // TODO: serde flatten for tuple structs?
-                    child_path.push(Some(LitStr::new(
-                        &format!("{}", i),
-                        proc_macro2::Span::call_site(),
-                    )));
+                    child_model.push(syn::parse2(quote! { patch_db::Model<#ty> }).unwrap());
                 }
+                // TODO: serde rename for tuple structs?
+                // TODO: serde flatten for tuple structs?
+                child_path.push(Some(LitStr::new(
+                    &format!("{}", i),
+                    proc_macro2::Span::call_site(),
+                )));
             }
         }
+        Fields::Unnamed(_f) => {}
         Fields::Unit => (),
     }
     let child_path_expr = child_path.iter().map(|child_path| {
@@ -292,13 +309,31 @@ fn build_model_struct(
                     #child_path_expr
                 }
             )*
+            pub fn into_model(self) -> patch_db::Model<#base_name> {
+                self.into()
+            }
         }
         impl From<patch_db::json_ptr::JsonPointer> for #model_name {
             fn from(ptr: patch_db::json_ptr::JsonPointer) -> Self {
                 #model_name(From::from(ptr))
             }
         }
+        impl From<patch_db::JsonGlob> for #model_name {
+            fn from(ptr: patch_db::JsonGlob) -> Self {
+                #model_name(From::from(ptr))
+            }
+        }
+        impl From<#model_name> for patch_db::Model<#base_name> {
+            fn from(model: #model_name) -> Self {
+                model.0
+            }
+        }
         impl From<#model_name> for patch_db::json_ptr::JsonPointer {
+            fn from(model: #model_name) -> Self {
+                model.0.into()
+            }
+        }
+        impl From<#model_name> for patch_db::JsonGlob {
             fn from(model: #model_name) -> Self {
                 model.0.into()
             }
@@ -345,6 +380,16 @@ fn build_model_enum(base: &DeriveInput, _: &DataEnum, model_name: Option<Ident>)
         impl From<patch_db::json_ptr::JsonPointer> for #model_name {
             fn from(ptr: patch_db::json_ptr::JsonPointer) -> Self {
                 #model_name(From::from(ptr))
+            }
+        }
+        impl From<patch_db::JsonGlob> for #model_name {
+            fn from(ptr: patch_db::JsonGlob) -> Self {
+                #model_name(From::from(ptr))
+            }
+        }
+        impl From<#model_name> for patch_db::JsonGlob {
+            fn from(model: #model_name) -> Self {
+                model.0.into()
             }
         }
         impl From<#model_name> for patch_db::json_ptr::JsonPointer {

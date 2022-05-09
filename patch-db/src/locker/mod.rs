@@ -1,5 +1,6 @@
 mod action_mux;
 mod bookkeeper;
+#[cfg(feature = "tracing")]
 mod log_utils;
 mod natural;
 mod order_enforcer;
@@ -8,15 +9,14 @@ pub(crate) mod proptest;
 mod trie;
 
 use imbl::{ordmap, ordset, OrdMap, OrdSet};
-use json_ptr::JsonPointer;
 use tokio::sync::{mpsc, oneshot};
 #[cfg(feature = "tracing")]
 use tracing::{debug, trace, warn};
 
 use self::action_mux::ActionMux;
 use self::bookkeeper::LockBookkeeper;
-use crate::handle::HandleId;
-use crate::locker::action_mux::Action;
+use crate::{bulk_locks::LockTargetId, locker::action_mux::Action, Verifier};
+use crate::{handle::HandleId, JsonGlob};
 
 pub struct Locker {
     sender: mpsc::UnboundedSender<Request>,
@@ -74,15 +74,44 @@ impl Locker {
     pub async fn lock(
         &self,
         handle_id: HandleId,
-        ptr: JsonPointer,
+        ptr: JsonGlob,
         lock_type: LockType,
     ) -> Result<Guard, LockError> {
         // Pertinent Logic
-        let lock_info = LockInfo {
+        let lock_info: LockInfos = LockInfo {
             handle_id,
             ptr,
             ty: lock_type,
-        };
+        }
+        .into();
+        self._lock(lock_info).await
+    }
+
+    pub async fn lock_all(
+        &self,
+        handle_id: &HandleId,
+        locks: impl IntoIterator<Item = LockTargetId> + Send,
+    ) -> Result<Guard, LockError> {
+        let lock_infos = LockInfos(
+            locks
+                .into_iter()
+                .map(
+                    |LockTargetId {
+                         glob: ptr,
+                         lock_type: ty,
+                     }| {
+                        LockInfo {
+                            handle_id: handle_id.clone(),
+                            ptr,
+                            ty,
+                        }
+                    },
+                )
+                .collect(),
+        );
+        self._lock(lock_infos).await
+    }
+    async fn _lock(&self, lock_info: LockInfos) -> Result<Guard, LockError> {
         let (send, recv) = oneshot::channel();
         let (cancel_send, cancel_recv) = oneshot::channel();
         let mut cancel_guard = CancelGuard {
@@ -101,11 +130,11 @@ impl Locker {
         cancel_guard.channel.take();
         res
     }
-} // Local Definitions
+}
 #[derive(Debug)]
 struct CancelGuard {
-    lock_info: Option<LockInfo>,
-    channel: Option<oneshot::Sender<LockInfo>>,
+    lock_info: Option<LockInfos>,
+    channel: Option<oneshot::Sender<LockInfos>>,
     recv: oneshot::Receiver<Result<Guard, LockError>>,
 }
 impl Drop for CancelGuard {
@@ -117,10 +146,37 @@ impl Drop for CancelGuard {
     }
 }
 
+#[derive(Debug, Default, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct LockInfos(pub Vec<LockInfo>);
+impl LockInfos {
+    fn conflicts_with(&self, other: &LockInfos) -> bool {
+        let other_lock_infos = &other.0;
+        self.0.iter().any(|lock_info| {
+            other_lock_infos
+                .iter()
+                .any(|other_lock_info| lock_info.conflicts_with(other_lock_info))
+        })
+    }
+
+    fn as_vec(&self) -> &Vec<LockInfo> {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for LockInfos {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let lock_infos = &self.0;
+        for lock_info in lock_infos {
+            write!(f, "{},", lock_info)?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord)]
 struct LockInfo {
     handle_id: HandleId,
-    ptr: JsonPointer,
+    ptr: JsonGlob,
     ty: LockType,
 }
 impl LockInfo {
@@ -144,6 +200,7 @@ impl LockInfo {
                 }
             }
     }
+    #[cfg(any(feature = "unstable", test))]
     fn implicitly_grants(&self, other: &LockInfo) -> bool {
         self.handle_id == other.handle_id
             && match self.ty {
@@ -161,6 +218,12 @@ impl LockInfo {
                         || other.ptr.starts_with(&self.ptr)
                 }
             }
+    }
+}
+
+impl From<LockInfo> for LockInfos {
+    fn from(lock_info: LockInfo) -> Self {
+        LockInfos(vec![lock_info])
     }
 }
 impl std::fmt::Display for LockInfo {
@@ -192,16 +255,17 @@ impl std::fmt::Display for LockType {
 }
 
 #[derive(Debug, Clone)]
-pub struct LockSet(OrdSet<LockInfo>);
+pub struct LockSet(OrdSet<LockInfos>);
 impl std::fmt::Display for LockSet {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let by_session = self
             .0
             .iter()
+            .flat_map(|x| x.as_vec())
             .map(|i| (&i.handle_id, ordset![(&i.ptr, &i.ty)]))
             .fold(
                 ordmap! {},
-                |m: OrdMap<&HandleId, OrdSet<(&JsonPointer, &LockType)>>, (id, s)| {
+                |m: OrdMap<&HandleId, OrdSet<(&JsonGlob, &LockType)>>, (id, s)| {
                     m.update_with(&id, s, OrdSet::union)
                 },
             );
@@ -230,22 +294,22 @@ pub enum LockError {
     #[error("Lock Taxonomy Escalation: Session = {session:?}, First = {first}, Second = {second}")]
     LockTaxonomyEscalation {
         session: HandleId,
-        first: JsonPointer,
-        second: JsonPointer,
+        first: JsonGlob,
+        second: JsonGlob,
     },
     #[error("Lock Type Escalation: Session = {session:?}, Pointer = {ptr}, First = {first}, Second = {second}")]
     LockTypeEscalation {
         session: HandleId,
-        ptr: JsonPointer,
+        ptr: JsonGlob,
         first: LockType,
         second: LockType,
     },
     #[error("Lock Type Escalation Implicit: Session = {session:?}, First = {first_ptr}:{first_type}, Second = {second_ptr}:{second_type}")]
     LockTypeEscalationImplicit {
         session: HandleId,
-        first_ptr: JsonPointer,
+        first_ptr: JsonGlob,
         first_type: LockType,
-        second_ptr: JsonPointer,
+        second_ptr: JsonGlob,
         second_type: LockType,
     },
     #[error(
@@ -253,8 +317,8 @@ pub enum LockError {
     )]
     NonCanonicalOrdering {
         session: HandleId,
-        first: JsonPointer,
-        second: JsonPointer,
+        first: JsonGlob,
+        second: JsonGlob,
     },
     #[error("Deadlock Detected:\nLocks Held =\n{locks_held},\nLocks Waiting =\n{locks_waiting}")]
     DeadlockDetected {
@@ -265,12 +329,12 @@ pub enum LockError {
 
 #[derive(Debug)]
 struct Request {
-    lock_info: LockInfo,
-    cancel: Option<oneshot::Receiver<LockInfo>>,
+    lock_info: LockInfos,
+    cancel: Option<oneshot::Receiver<LockInfos>>,
     completion: oneshot::Sender<Result<Guard, LockError>>,
 }
 impl Request {
-    fn complete(self) -> oneshot::Receiver<LockInfo> {
+    fn complete(self) -> oneshot::Receiver<LockInfos> {
         let (sender, receiver) = oneshot::channel();
         if let Err(_) = self.completion.send(Ok(Guard {
             lock_info: self.lock_info,
@@ -291,8 +355,8 @@ impl Request {
 
 #[derive(Debug)]
 pub struct Guard {
-    lock_info: LockInfo,
-    sender: Option<oneshot::Sender<LockInfo>>,
+    lock_info: LockInfos,
+    sender: Option<oneshot::Sender<LockInfos>>,
 }
 impl Drop for Guard {
     fn drop(&mut self) {
@@ -306,4 +370,101 @@ impl Drop for Guard {
             warn!("Failed to release lock: {:?}", _e)
         }
     }
+}
+
+#[test]
+fn conflicts_with_locker_infos_cases() {
+    let mut id: u64 = 0;
+    let lock_info_a = LockInfo {
+        handle_id: HandleId {
+            id: {
+                id += 1;
+                id
+            },
+            #[cfg(feature = "trace")]
+            trace: None,
+        },
+        ty: LockType::Write,
+        ptr: "/a".parse().unwrap(),
+    };
+    let lock_infos_a = LockInfos(vec![lock_info_a.clone()]);
+    let lock_info_b = LockInfo {
+        handle_id: HandleId {
+            id: {
+                id += 1;
+                id
+            },
+            #[cfg(feature = "trace")]
+            trace: None,
+        },
+        ty: LockType::Write,
+        ptr: "/b".parse().unwrap(),
+    };
+    let lock_infos_b = LockInfos(vec![lock_info_b.clone()]);
+    let lock_info_a_s = LockInfo {
+        handle_id: HandleId {
+            id: {
+                id += 1;
+                id
+            },
+            #[cfg(feature = "trace")]
+            trace: None,
+        },
+        ty: LockType::Write,
+        ptr: "/a/*".parse().unwrap(),
+    };
+    let lock_infos_a_s = LockInfos(vec![lock_info_a_s.clone()]);
+    let lock_info_a_s_c = LockInfo {
+        handle_id: HandleId {
+            id: {
+                id += 1;
+                id
+            },
+            #[cfg(feature = "trace")]
+            trace: None,
+        },
+        ty: LockType::Write,
+        ptr: "/a/*/c".parse().unwrap(),
+    };
+    let lock_infos_a_s_c = LockInfos(vec![lock_info_a_s_c.clone()]);
+
+    let lock_info_a_b_c = LockInfo {
+        handle_id: HandleId {
+            id: {
+                id += 1;
+                id
+            },
+            #[cfg(feature = "trace")]
+            trace: None,
+        },
+        ty: LockType::Write,
+        ptr: "/a/b/c".parse().unwrap(),
+    };
+    let lock_infos_a_b_c = LockInfos(vec![lock_info_a_b_c.clone()]);
+
+    let lock_infos_set = LockInfos(vec![lock_info_a.clone()]);
+    let lock_infos_set_b = LockInfos(vec![lock_info_b]);
+    let lock_infos_set_deep = LockInfos(vec![
+        lock_info_a_s.clone(),
+        lock_info_a_s_c.clone(),
+        lock_info_a_b_c.clone(),
+    ]);
+    let lock_infos_set_all = LockInfos(vec![
+        lock_info_a,
+        lock_info_a_s,
+        lock_info_a_s_c,
+        lock_info_a_b_c,
+    ]);
+
+    assert!(!lock_infos_b.conflicts_with(&lock_infos_a));
+    assert!(!lock_infos_a.conflicts_with(&lock_infos_a)); // same lock won't
+    assert!(lock_infos_a_s.conflicts_with(&lock_infos_a)); // Since the parent is locked, it won't be able to
+    assert!(lock_infos_a_s.conflicts_with(&lock_infos_a_s_c));
+    assert!(lock_infos_a_s_c.conflicts_with(&lock_infos_a_b_c));
+    assert!(!lock_infos_set.conflicts_with(&lock_infos_a)); // Same lock again
+    assert!(lock_infos_set.conflicts_with(&lock_infos_set_deep)); // Since this is a parent
+    assert!(!lock_infos_set_b.conflicts_with(&lock_infos_set_deep)); // Sets are exclusive
+    assert!(!lock_infos_set.conflicts_with(&lock_infos_set_b)); // Sets are exclusive
+    assert!(lock_infos_set_deep.conflicts_with(&lock_infos_set)); // Shared parent a
+    assert!(lock_infos_set_deep.conflicts_with(&lock_infos_set_all)); // Shared parent a
 }

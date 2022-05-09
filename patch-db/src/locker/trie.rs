@@ -3,10 +3,10 @@ use std::collections::BTreeMap;
 use imbl::{ordset, OrdSet};
 use json_ptr::{JsonPointer, SegList};
 
-use super::natural::Natural;
 use super::LockInfo;
-use crate::handle::HandleId;
-use crate::LockType;
+use super::{natural::Natural, LockInfos};
+use crate::{handle::HandleId, model_paths::JsonGlob};
+use crate::{model_paths::JsonGlobSegment, LockType};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum LockState {
@@ -51,10 +51,7 @@ impl LockState {
         }
     }
     fn write_free(&self) -> bool {
-        match self {
-            LockState::Exclusive { .. } => false,
-            _ => true,
-        }
+        !matches!(self, LockState::Exclusive { .. })
     }
     fn read_free(&self) -> bool {
         match self {
@@ -65,7 +62,7 @@ impl LockState {
             _ => true,
         }
     }
-    fn sessions<'a>(&'a self) -> OrdSet<&'a HandleId> {
+    fn sessions(&self) -> OrdSet<&'_ HandleId> {
         match self {
             LockState::Free => OrdSet::new(),
             LockState::Shared {
@@ -76,7 +73,7 @@ impl LockState {
         }
     }
     #[allow(dead_code)]
-    fn exist_sessions<'a>(&'a self) -> OrdSet<&'a HandleId> {
+    fn exist_sessions(&self) -> OrdSet<&'_ HandleId> {
         match self {
             LockState::Free => OrdSet::new(),
             LockState::Shared { e_lessees, .. } => e_lessees.keys().collect(),
@@ -93,7 +90,7 @@ impl LockState {
             }
         }
     }
-    fn read_sessions<'a>(&'a self) -> OrdSet<&'a HandleId> {
+    fn read_sessions(&self) -> OrdSet<&'_ HandleId> {
         match self {
             LockState::Free => OrdSet::new(),
             LockState::Shared { r_lessees, .. } => r_lessees.keys().collect(),
@@ -110,7 +107,7 @@ impl LockState {
             }
         }
     }
-    fn write_session<'a>(&'a self) -> Option<&'a HandleId> {
+    fn write_session(&self) -> Option<&'_ HandleId> {
         match self {
             LockState::Exclusive { w_lessee, .. } => Some(w_lessee),
             _ => None,
@@ -373,12 +370,9 @@ impl LockTrie {
     }
     #[allow(dead_code)]
     fn subtree_is_exclusive_free_for(&self, session: &HandleId) -> bool {
-        self.all(|s| match s.clone().erase(session) {
-            LockState::Exclusive { .. } => false,
-            _ => true,
-        })
+        self.all(|s| !matches!(s.clone().erase(session), LockState::Exclusive { .. }))
     }
-    fn subtree_write_sessions<'a>(&'a self) -> OrdSet<&'a HandleId> {
+    fn subtree_write_sessions(&self) -> OrdSet<&'_ HandleId> {
         match &self.state {
             LockState::Exclusive { w_lessee, .. } => ordset![w_lessee],
             _ => self
@@ -388,7 +382,7 @@ impl LockTrie {
                 .fold(OrdSet::new(), OrdSet::union),
         }
     }
-    fn subtree_sessions<'a>(&'a self) -> OrdSet<&'a HandleId> {
+    fn subtree_sessions(&self) -> OrdSet<&'_ HandleId> {
         let children = self
             .children
             .values()
@@ -396,19 +390,25 @@ impl LockTrie {
             .fold(OrdSet::new(), OrdSet::union);
         self.state.sessions().union(children)
     }
-    pub fn subtree_lock_info<'a>(&'a self) -> OrdSet<LockInfo> {
+    pub fn subtree_lock_info(&self) -> OrdSet<LockInfo> {
         let mut acc = self
             .children
             .iter()
             .map(|(s, t)| {
                 t.subtree_lock_info()
                     .into_iter()
-                    .map(|mut i| LockInfo {
+                    .map(|i| LockInfo {
                         ty: i.ty,
                         handle_id: i.handle_id,
                         ptr: {
-                            i.ptr.push_start(s);
-                            i.ptr
+                            i.ptr.append(s.parse().unwrap_or_else(|_| {
+                                #[cfg(feature = "tracing")]
+                                tracing::error!(
+                                    "Should never not be able to parse a string as a path"
+                                );
+
+                                Default::default()
+                            }))
                         },
                     })
                     .collect()
@@ -416,7 +416,7 @@ impl LockTrie {
             .fold(ordset![], OrdSet::union);
         let self_writes = self.state.write_session().map(|session| LockInfo {
             handle_id: session.clone(),
-            ptr: JsonPointer::default(),
+            ptr: Default::default(),
             ty: LockType::Write,
         });
         let self_reads = self
@@ -425,7 +425,7 @@ impl LockTrie {
             .into_iter()
             .map(|session| LockInfo {
                 handle_id: session.clone(),
-                ptr: JsonPointer::default(),
+                ptr: Default::default(),
                 ty: LockType::Read,
             });
         let self_exists = self
@@ -434,13 +434,13 @@ impl LockTrie {
             .into_iter()
             .map(|session| LockInfo {
                 handle_id: session.clone(),
-                ptr: JsonPointer::default(),
+                ptr: Default::default(),
                 ty: LockType::Exist,
             });
         acc.extend(self_writes.into_iter().chain(self_reads).chain(self_exists));
         acc
     }
-    fn ancestors_and_trie<'a, S: AsRef<str>, V: SegList>(
+    fn ancestors_and_trie_json_path<'a, S: AsRef<str>, V: SegList>(
         &'a self,
         ptr: &JsonPointer<S, V>,
     ) -> (Vec<&'a LockState>, Option<&'a LockTrie>) {
@@ -449,105 +449,194 @@ impl LockTrie {
             Some((first, rest)) => match self.children.get(first) {
                 None => (vec![&self.state], None),
                 Some(t) => {
-                    let (mut v, t) = t.ancestors_and_trie(&rest);
+                    let (mut v, t) = t.ancestors_and_trie_json_path(&rest);
                     v.push(&self.state);
                     (v, t)
                 }
             },
         }
     }
+    fn ancestors_and_trie_model_paths<'a>(
+        &'a self,
+        path: &[JsonGlobSegment],
+    ) -> Vec<(Vec<&'a LockState>, Option<&'a LockTrie>)> {
+        let head = path.get(0);
+        match head {
+            None => vec![(Vec::new(), Some(self))],
+            Some(JsonGlobSegment::Star) => self
+                .children
+                .values()
+                .into_iter()
+                .flat_map(|lock_trie| lock_trie.ancestors_and_trie_model_paths(&path[1..]))
+                .collect(),
+            Some(JsonGlobSegment::Path(x)) => match self.children.get(x) {
+                None => vec![(vec![&self.state], None)],
+                Some(t) => t
+                    .ancestors_and_trie_model_paths(&path[1..])
+                    .into_iter()
+                    .map(|(mut v, t)| {
+                        v.push(&self.state);
+                        (v, t)
+                    })
+                    .collect(),
+            },
+        }
+    }
+    fn ancestors_and_trie<'a>(
+        &'a self,
+        ptr: &JsonGlob,
+    ) -> Vec<(Vec<&'a LockState>, Option<&'a LockTrie>)> {
+        match ptr {
+            JsonGlob::Path(x) => vec![self.ancestors_and_trie_json_path(x)],
+            JsonGlob::PathWithStar(path) => self.ancestors_and_trie_model_paths(path.segments()),
+        }
+    }
     // no writes in ancestor set, no writes at node
     #[allow(dead_code)]
-    fn can_acquire_exist(&self, ptr: &JsonPointer, session: &HandleId) -> bool {
-        let (v, t) = self.ancestors_and_trie(ptr);
-        let ancestor_write_free = v
+    fn can_acquire_exist(&self, ptr: &JsonGlob, session: &HandleId) -> bool {
+        let (vectors, tries): (Vec<_>, Vec<_>) = self.ancestors_and_trie(ptr).into_iter().unzip();
+        let ancestor_write_free = vectors.into_iter().all(|v| {
+            v.into_iter()
+                .cloned()
+                .map(|s| s.erase(session))
+                .all(|s| s.write_free())
+        });
+        let checking_end_tries_are_write_free = tries
             .into_iter()
-            .cloned()
-            .map(|s| s.erase(session))
-            .all(|s| s.write_free());
-        ancestor_write_free && t.map_or(true, |t| t.state.clone().erase(session).write_free())
+            .all(|t| t.map_or(true, |t| t.state.clone().erase(session).write_free()));
+        ancestor_write_free && checking_end_tries_are_write_free
     }
     // no writes in ancestor set, no writes in subtree
     #[allow(dead_code)]
-    fn can_acquire_read(&self, ptr: &JsonPointer, session: &HandleId) -> bool {
-        let (v, t) = self.ancestors_and_trie(ptr);
-        let ancestor_write_free = v
+    fn can_acquire_read(&self, ptr: &JsonGlob, session: &HandleId) -> bool {
+        let (vectors, tries): (Vec<_>, Vec<_>) = self.ancestors_and_trie(ptr).into_iter().unzip();
+        let ancestor_write_free = vectors.into_iter().all(|v| {
+            v.into_iter()
+                .cloned()
+                .map(|s| s.erase(session))
+                .all(|s| s.write_free())
+        });
+        let end_nodes_are_correct = tries
             .into_iter()
-            .cloned()
-            .map(|s| s.erase(session))
-            .all(|s| s.write_free());
-        ancestor_write_free && t.map_or(true, |t| t.subtree_is_exclusive_free_for(session))
+            .all(|t| t.map_or(true, |t| t.subtree_is_exclusive_free_for(session)));
+        ancestor_write_free && end_nodes_are_correct
     }
     // no reads or writes in ancestor set, no locks in subtree
     #[allow(dead_code)]
-    fn can_acquire_write(&self, ptr: &JsonPointer, session: &HandleId) -> bool {
-        let (v, t) = self.ancestors_and_trie(ptr);
-        let ancestor_rw_free = v
+    fn can_acquire_write(&self, ptr: &JsonGlob, session: &HandleId) -> bool {
+        let (vectors, tries): (Vec<_>, Vec<_>) = self.ancestors_and_trie(ptr).into_iter().unzip();
+        let ancestor_rw_free = vectors.into_iter().all(|v| {
+            v.into_iter()
+                .cloned()
+                .map(|s| s.erase(session))
+                .all(|s| s.write_free() && s.read_free())
+        });
+
+        let end_nodes_are_correct = tries
             .into_iter()
-            .cloned()
-            .map(|s| s.erase(session))
-            .all(|s| s.write_free() && s.read_free());
-        ancestor_rw_free && t.map_or(true, |t| t.subtree_is_lock_free_for(session))
+            .all(|t| t.map_or(true, |t| t.subtree_is_lock_free_for(session)));
+        ancestor_rw_free && end_nodes_are_correct
     }
     // ancestors with writes and writes on the node
     fn session_blocking_exist<'a>(
         &'a self,
-        ptr: &JsonPointer,
+        ptr: &JsonGlob,
         session: &HandleId,
     ) -> Option<&'a HandleId> {
-        let (v, t) = self.ancestors_and_trie(ptr);
-        // there can only be one write session per traversal
-        let ancestor_write = v.into_iter().find_map(|s| s.write_session());
-        let node_write = t.and_then(|t| t.state.write_session());
-        ancestor_write
-            .or(node_write)
-            .and_then(|s| if s == session { None } else { Some(s) })
+        let vectors_and_tries = self.ancestors_and_trie(ptr);
+        vectors_and_tries.into_iter().find_map(|(v, t)| {
+            // there can only be one write session per traversal
+            let ancestor_write = v.into_iter().find_map(|s| s.write_session());
+            let node_write = t.and_then(|t| t.state.write_session());
+            ancestor_write
+                .or(node_write)
+                .and_then(|s| if s == session { None } else { Some(s) })
+        })
     }
     // ancestors with writes, subtrees with writes
     fn sessions_blocking_read<'a>(
         &'a self,
-        ptr: &JsonPointer,
+        ptr: &JsonGlob,
         session: &HandleId,
     ) -> OrdSet<&'a HandleId> {
-        let (v, t) = self.ancestors_and_trie(ptr);
-        let ancestor_writes = v
+        let vectors_and_tries = self.ancestors_and_trie(ptr);
+        vectors_and_tries
             .into_iter()
-            .map(|s| s.write_session().into_iter().collect::<OrdSet<_>>())
-            .fold(OrdSet::new(), OrdSet::union);
-        let relevant_write_sessions = match t {
-            None => ancestor_writes,
-            Some(t) => ancestor_writes.union(t.subtree_write_sessions()),
-        };
-        relevant_write_sessions.without(session)
+            .flat_map(|(v, t)| {
+                let ancestor_writes = v
+                    .into_iter()
+                    .map(|s| s.write_session().into_iter().collect::<OrdSet<_>>())
+                    .fold(OrdSet::new(), OrdSet::union);
+                let relevant_write_sessions = match t {
+                    None => ancestor_writes,
+                    Some(t) => ancestor_writes.union(t.subtree_write_sessions()),
+                };
+                relevant_write_sessions.without(session)
+            })
+            .collect()
     }
     // ancestors with reads or writes, subtrees with anything
     fn sessions_blocking_write<'a>(
         &'a self,
-        ptr: &JsonPointer,
+        ptr: &JsonGlob,
         session: &HandleId,
     ) -> OrdSet<&'a HandleId> {
-        let (v, t) = self.ancestors_and_trie(ptr);
-        let ancestors = v
+        let vectors_and_tries = self.ancestors_and_trie(ptr);
+        vectors_and_tries
             .into_iter()
-            .map(|s| {
-                s.read_sessions()
-                    .union(s.write_session().into_iter().collect())
+            .flat_map(|(v, t)| {
+                let ancestors = v
+                    .into_iter()
+                    .map(|s| {
+                        s.read_sessions()
+                            .union(s.write_session().into_iter().collect())
+                    })
+                    .fold(OrdSet::new(), OrdSet::union);
+                let subtree = t.map_or(OrdSet::new(), |t| t.subtree_sessions());
+                ancestors.union(subtree).without(session)
             })
-            .fold(OrdSet::new(), OrdSet::union);
-        let subtree = t.map_or(OrdSet::new(), |t| t.subtree_sessions());
-        ancestors.union(subtree).without(session)
+            .collect()
     }
 
-    fn child_mut<S: AsRef<str>, V: SegList>(&mut self, ptr: &JsonPointer<S, V>) -> &mut Self {
+    fn child_mut_pointer<S: AsRef<str>, V: SegList>(
+        &mut self,
+        ptr: &JsonPointer<S, V>,
+    ) -> &mut Self {
         match ptr.uncons() {
             None => self,
             Some((first, rest)) => {
                 if !self.children.contains_key(first) {
                     self.children.insert(first.to_owned(), LockTrie::default());
                 }
-                self.children.get_mut(first).unwrap().child_mut(&rest)
+                self.children
+                    .get_mut(first)
+                    .unwrap()
+                    .child_mut_pointer(&rest)
             }
         }
+    }
+
+    fn child_mut(&mut self, ptr: &JsonGlob) -> &mut Self {
+        match ptr {
+            JsonGlob::Path(x) => self.child_mut_pointer(x),
+            JsonGlob::PathWithStar(path) => self.child_mut_paths(path.segments()),
+        }
+    }
+
+    fn child_mut_paths(&mut self, path: &[JsonGlobSegment]) -> &mut LockTrie {
+        let mut current = self;
+        let paths_iter = path.iter();
+        for head in paths_iter {
+            let key = match head {
+                JsonGlobSegment::Path(path) => path.clone(),
+                JsonGlobSegment::Star => "*".to_string(),
+            };
+            if !current.children.contains_key(&key) {
+                current.children.insert(key.to_owned(), LockTrie::default());
+            }
+            current = current.children.get_mut(&key).unwrap();
+        }
+        current
     }
 
     fn sessions_blocking_lock<'a>(&'a self, lock_info: &LockInfo) -> OrdSet<&'a HandleId> {
@@ -561,17 +650,23 @@ impl LockTrie {
         }
     }
 
-    pub fn try_lock<'a>(&'a mut self, lock_info: &LockInfo) -> Result<(), OrdSet<HandleId>> {
-        let blocking_sessions = self.sessions_blocking_lock(lock_info);
+    pub fn try_lock(&mut self, lock_infos: &LockInfos) -> Result<(), OrdSet<HandleId>> {
+        let lock_info_vec = lock_infos.as_vec();
+        let blocking_sessions: OrdSet<_> = lock_info_vec
+            .iter()
+            .flat_map(|lock_info| self.sessions_blocking_lock(lock_info))
+            .collect();
         if !blocking_sessions.is_empty() {
             Err(blocking_sessions.into_iter().cloned().collect())
         } else {
             drop(blocking_sessions);
-            let success = self
-                .child_mut(&lock_info.ptr)
-                .state
-                .try_lock(lock_info.handle_id.clone(), &lock_info.ty);
-            assert!(success);
+            for lock_info in lock_info_vec {
+                let success = self
+                    .child_mut(&lock_info.ptr)
+                    .state
+                    .try_lock(lock_info.handle_id.clone(), &lock_info.ty);
+                assert!(success);
+            }
             Ok(())
         }
     }

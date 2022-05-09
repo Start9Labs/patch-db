@@ -5,9 +5,10 @@ use tokio::sync::oneshot;
 #[cfg(feature = "tracing")]
 use tracing::{debug, error, info, warn};
 
+#[cfg(feature = "unstable")]
 use super::order_enforcer::LockOrderEnforcer;
 use super::trie::LockTrie;
-use super::{LockError, LockInfo, Request};
+use super::{LockError, LockInfos, Request};
 use crate::handle::HandleId;
 #[cfg(feature = "tracing")]
 use crate::locker::log_utils::{
@@ -35,7 +36,7 @@ impl LockBookkeeper {
     pub fn lease(
         &mut self,
         req: Request,
-    ) -> Result<Option<oneshot::Receiver<LockInfo>>, LockError> {
+    ) -> Result<Option<oneshot::Receiver<LockInfos>>, LockError> {
         #[cfg(feature = "unstable")]
         if let Err(e) = self.order_enforcer.try_insert(&req.lock_info) {
             req.reject(e.clone());
@@ -53,45 +54,69 @@ impl LockBookkeeper {
 
         if let Some(hot_seat) = hot_seat {
             self.deferred_request_queue.push_front(hot_seat);
-            kill_deadlocked(&mut self.deferred_request_queue, &mut self.trie);
+            kill_deadlocked(&mut self.deferred_request_queue, &self.trie);
         }
         Ok(res)
     }
 
-    pub fn cancel(&mut self, info: &LockInfo) {
+    pub fn cancel(&mut self, info: &LockInfos) {
         #[cfg(feature = "unstable")]
-        self.order_enforcer.remove(&info);
+        for info in info.as_vec() {
+            self.order_enforcer.remove(&info);
+        }
 
         let entry = self
             .deferred_request_queue
             .iter()
             .enumerate()
             .find(|(_, (r, _))| &r.lock_info == info);
-        match entry {
+        let index = match entry {
             None => {
                 #[cfg(feature = "tracing")]
-                warn!(
-                    "Received cancellation for a lock not currently waiting: {}",
-                    info.ptr
-                );
+                {
+                    let infos = &info.0;
+                    warn!(
+                        "Received cancellation for some locks not currently waiting: [{}]",
+                        infos
+                            .iter()
+                            .enumerate()
+                            .fold(String::new(), |acc, (i, new)| {
+                                if i > 0 {
+                                    format!("{}/{}", acc, new.ptr)
+                                } else {
+                                    format!("/{}", new.ptr)
+                                }
+                            })
+                    );
+                }
+                return;
             }
-            Some((i, (req, _))) => {
+            Some(value) => {
                 #[cfg(feature = "tracing")]
-                info!("{}", fmt_cancelled(&req.lock_info));
-
-                self.deferred_request_queue.remove(i);
+                for lock_info in value.1 .0.lock_info.as_vec() {
+                    info!("{}", fmt_cancelled(lock_info));
+                }
+                value.0
             }
-        }
+        };
+
+        self.deferred_request_queue.remove(index);
     }
 
-    pub fn ret(&mut self, info: &LockInfo) -> Vec<oneshot::Receiver<LockInfo>> {
+    pub fn ret(&mut self, info: &LockInfos) -> Vec<oneshot::Receiver<LockInfos>> {
         #[cfg(feature = "unstable")]
-        self.order_enforcer.remove(&info);
-        self.trie.unlock(&info);
+        for info in info.as_vec() {
+            self.order_enforcer.remove(&info);
+        }
+        for info in info.as_vec() {
+            self.trie.unlock(info);
+        }
 
         #[cfg(feature = "tracing")]
         {
-            info!("{}", fmt_released(&info));
+            for info in info.as_vec() {
+                info!("{}", fmt_released(&info));
+            }
             debug!("Reexamining request queue backlog...");
         }
 
@@ -127,7 +152,7 @@ impl LockBookkeeper {
         }
         if let Some(hot_seat) = hot_seat {
             self.deferred_request_queue.push_front(hot_seat);
-            kill_deadlocked(&mut self.deferred_request_queue, &mut self.trie);
+            kill_deadlocked(&mut self.deferred_request_queue, &self.trie);
         }
         new_unlock_receivers
     }
@@ -141,21 +166,31 @@ fn process_new_req(
     hot_seat: Option<&(Request, OrdSet<HandleId>)>,
     trie: &mut LockTrie,
     request_queue: &mut VecDeque<(Request, OrdSet<HandleId>)>,
-) -> Option<oneshot::Receiver<LockInfo>> {
+) -> Option<oneshot::Receiver<LockInfos>> {
+    #[cfg(feature = "tracing")]
+    let lock_infos = req.lock_info.as_vec();
     match hot_seat {
         // hot seat conflicts and request session isn't in current blocking sessions
         // so we push it to the queue
         Some((hot_req, hot_blockers))
             if hot_req.lock_info.conflicts_with(&req.lock_info)
-                && !hot_blockers.contains(&req.lock_info.handle_id) =>
+                && !req
+                    .lock_info
+                    .as_vec()
+                    .iter()
+                    .any(|lock_info| hot_blockers.contains(&lock_info.handle_id)) =>
         {
             #[cfg(feature = "tracing")]
             {
-                info!("{}", fmt_deferred(&req.lock_info));
-                debug!(
-                    "Must wait on hot seat request from session {}",
-                    &hot_req.lock_info.handle_id.id
-                );
+                for lock_info in lock_infos.iter() {
+                    info!("{}", fmt_deferred(&lock_info));
+                }
+                if let Some(hot_req_lock_info) = hot_req.lock_info.as_vec().first() {
+                    debug!(
+                        "Must wait on hot seat request from session {}",
+                        &hot_req_lock_info.handle_id.id
+                    );
+                }
             }
 
             request_queue.push_back((req, ordset![]));
@@ -165,14 +200,18 @@ fn process_new_req(
         _ => match trie.try_lock(&req.lock_info) {
             Ok(()) => {
                 #[cfg(feature = "tracing")]
-                info!("{}", fmt_acquired(&req.lock_info));
+                for lock_info in lock_infos.iter() {
+                    info!("{}", fmt_acquired(&lock_info));
+                }
 
                 Some(req.complete())
             }
             Err(blocking_sessions) => {
                 #[cfg(feature = "tracing")]
                 {
-                    info!("{}", fmt_deferred(&req.lock_info));
+                    for lock_info in lock_infos.iter() {
+                        info!("{}", fmt_deferred(&lock_info));
+                    }
                     debug!(
                         "Must wait on sessions {}",
                         display_session_set(&blocking_sessions)
@@ -200,7 +239,13 @@ fn kill_deadlocked(request_queue: &mut VecDeque<(Request, OrdSet<HandleId>)>, tr
         error!("Deadlock Detected: {:?}", locks_waiting);
         let err = LockError::DeadlockDetected {
             locks_waiting,
-            locks_held: LockSet(trie.subtree_lock_info()),
+            locks_held: LockSet(
+                trie.subtree_lock_info()
+                    .into_iter()
+                    .map(|x| vec![x])
+                    .map(LockInfos)
+                    .collect(),
+            ),
         };
 
         let mut indices_to_remove = Vec::with_capacity(deadlocked_reqs.len());
@@ -220,15 +265,23 @@ fn kill_deadlocked(request_queue: &mut VecDeque<(Request, OrdSet<HandleId>)>, tr
     }
 }
 
-pub(super) fn deadlock_scan<'a>(
-    queue: &'a VecDeque<(Request, OrdSet<HandleId>)>,
-) -> Vec<&'a Request> {
+pub(super) fn deadlock_scan(queue: &VecDeque<(Request, OrdSet<HandleId>)>) -> Vec<&'_ Request> {
     let (wait_map, mut req_map) = queue
         .iter()
-        .map(|(req, set)| ((&req.lock_info.handle_id, set, req)))
+        .flat_map(|(req, set)| {
+            req.lock_info
+                .as_vec()
+                .into_iter()
+                .map(|lock_info| (&lock_info.handle_id, set, req))
+                .collect::<Vec<_>>()
+        })
         .fold(
             (ordmap! {}, ordmap! {}),
-            |(mut wmap, mut rmap), (id, wset, req)| {
+            |(mut wmap, mut rmap): (
+                OrdMap<&HandleId, &OrdSet<HandleId>>,
+                OrdMap<&HandleId, &Request>,
+            ),
+             (id, wset, req)| {
                 (
                     {
                         wmap.insert(id, wset);

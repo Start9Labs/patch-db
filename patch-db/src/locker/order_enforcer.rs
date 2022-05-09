@@ -1,22 +1,27 @@
-use imbl::{ordmap, OrdMap};
-use json_ptr::JsonPointer;
+use imbl::OrdMap;
 #[cfg(feature = "tracing")]
 use tracing::warn;
 
-use super::{LockError, LockInfo};
-use crate::handle::HandleId;
+use super::LockInfo;
 use crate::LockType;
+use crate::{handle::HandleId, model_paths::JsonGlob};
+
+#[cfg(any(feature = "unstable", test))]
+use super::LockError;
 
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct LockOrderEnforcer {
-    locks_held: OrdMap<HandleId, OrdMap<(JsonPointer, LockType), usize>>,
+    locks_held: OrdMap<HandleId, OrdMap<(JsonGlob, LockType), usize>>,
 }
 impl LockOrderEnforcer {
+    #[cfg(any(feature = "unstable", test))]
     pub fn new() -> Self {
         LockOrderEnforcer {
-            locks_held: ordmap! {},
+            locks_held: imbl::ordmap! {},
         }
     }
+    #[cfg_attr(feature = "trace", tracing::instrument)]
+    #[cfg(any(feature = "unstable", test))]
     // locks must be acquired in lexicographic order for the pointer, and reverse order for type
     fn validate(&self, req: &LockInfo) -> Result<(), LockError> {
         // the following notation is used to denote an example sequence that can cause deadlocks
@@ -94,29 +99,36 @@ impl LockOrderEnforcer {
             }
         }
     }
-    pub(super) fn try_insert(&mut self, req: &LockInfo) -> Result<(), LockError> {
-        self.validate(req)?;
-        match self.locks_held.get_mut(&req.handle_id) {
-            None => {
-                self.locks_held.insert(
-                    req.handle_id.clone(),
-                    ordmap![(req.ptr.clone(), req.ty) => 1],
-                );
-            }
-            Some(locks) => {
-                let k = (req.ptr.clone(), req.ty);
-                match locks.get_mut(&k) {
-                    None => {
-                        locks.insert(k, 1);
-                    }
-                    Some(n) => {
-                        *n += 1;
+    #[cfg(any(feature = "unstable", test))]
+    pub(super) fn try_insert(&mut self, reqs: &super::LockInfos) -> Result<(), LockError> {
+        // These are seperate since we want to check all first before we insert
+        for req in reqs.as_vec() {
+            self.validate(req)?;
+        }
+        for req in reqs.as_vec() {
+            match self.locks_held.get_mut(&req.handle_id) {
+                None => {
+                    self.locks_held.insert(
+                        req.handle_id.clone(),
+                        imbl::ordmap![(req.ptr.clone(), req.ty) => 1],
+                    );
+                }
+                Some(locks) => {
+                    let k = (req.ptr.clone(), req.ty);
+                    match locks.get_mut(&k) {
+                        None => {
+                            locks.insert(k, 1);
+                        }
+                        Some(n) => {
+                            *n += 1;
+                        }
                     }
                 }
             }
         }
         Ok(())
     }
+    #[cfg(any(feature = "unstable", test))]
     pub(super) fn remove(&mut self, req: &LockInfo) {
         match self.locks_held.remove_with_key(&req.handle_id) {
             None => {

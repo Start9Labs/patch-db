@@ -8,9 +8,11 @@ use tokio::sync::broadcast::error::TryRecvError;
 
 // note: inserting into an array (before another element) without proper locking can result in unexpected behaviour
 
+mod bulk_locks;
 mod handle;
 mod locker;
 mod model;
+mod model_paths;
 mod patch;
 mod store;
 mod transaction;
@@ -23,11 +25,19 @@ pub use locker::{LockType, Locker};
 pub use model::{
     BoxModel, HasModel, Map, MapModel, Model, ModelData, ModelDataMut, OptionModel, VecModel,
 };
+pub use model_paths::{JsonGlob, JsonGlobSegment};
 pub use patch::{DiffPatch, Dump, Revision};
 pub use patch_db_macro::HasModel;
 pub use store::{PatchDb, Store};
 pub use transaction::Transaction;
 pub use {json_patch, json_ptr};
+
+pub use bulk_locks::{LockReceipt, LockTarget, LockTargetId, Verifier};
+
+pub mod test_utils {
+    use super::*;
+    pub use handle::test_utils::*;
+}
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -53,4 +63,6 @@ pub enum Error {
     NodeDoesNotExist(JsonPointer),
     #[error("Invalid Lock Request: {0}")]
     LockError(#[from] LockError),
+    #[error("Invalid Lock Request: {0}")]
+    Locker(String),
 }

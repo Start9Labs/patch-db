@@ -2,13 +2,13 @@ use tokio::sync::mpsc::{self, UnboundedReceiver};
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::error::TryRecvError;
 
-use super::{LockInfo, Request};
+use super::{LockInfos, Request};
 
 #[derive(Debug)]
 pub(super) enum Action {
     HandleRequest(Request),
-    HandleRelease(LockInfo),
-    HandleCancel(LockInfo),
+    HandleRelease(LockInfos),
+    HandleCancel(LockInfos),
 }
 
 struct InboundRequestQueue {
@@ -17,9 +17,9 @@ struct InboundRequestQueue {
 }
 pub(super) struct ActionMux {
     inbound_request_queue: InboundRequestQueue,
-    unlock_receivers: Vec<oneshot::Receiver<LockInfo>>,
-    cancellation_receivers: Vec<oneshot::Receiver<LockInfo>>,
-    _dummy_senders: Vec<oneshot::Sender<LockInfo>>,
+    unlock_receivers: Vec<oneshot::Receiver<LockInfos>>,
+    cancellation_receivers: Vec<oneshot::Receiver<LockInfos>>,
+    _dummy_senders: Vec<oneshot::Sender<LockInfos>>,
 }
 impl ActionMux {
     pub fn new(inbound_receiver: UnboundedReceiver<Request>) -> Self {
@@ -106,14 +106,14 @@ impl ActionMux {
         }
     }
 
-    pub fn push_unlock_receivers<T: IntoIterator<Item = oneshot::Receiver<LockInfo>>>(
+    pub fn push_unlock_receivers<T: IntoIterator<Item = oneshot::Receiver<LockInfos>>>(
         &mut self,
         recv: T,
     ) {
         self.unlock_receivers.extend(recv)
     }
 
-    pub fn push_cancellation_receiver(&mut self, recv: oneshot::Receiver<LockInfo>) {
+    pub fn push_cancellation_receiver(&mut self, recv: oneshot::Receiver<LockInfos>) {
         self.cancellation_receivers.push(recv)
     }
 }

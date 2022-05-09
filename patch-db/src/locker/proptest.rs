@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, VecDeque};
+    use std::collections::VecDeque;
 
     use imbl::{ordmap, ordset, OrdMap, OrdSet};
     use json_ptr::JsonPointer;
@@ -10,9 +10,12 @@ mod tests {
     use tokio::sync::oneshot;
 
     use crate::handle::HandleId;
-    use crate::locker::bookkeeper::{deadlock_scan, path_to};
-    use crate::locker::{CancelGuard, Guard, LockError, LockInfo, LockType, Request};
+    use crate::locker::{CancelGuard, LockError, LockInfo, LockInfos, LockType, Request};
     use crate::Locker;
+    use crate::{
+        locker::bookkeeper::{deadlock_scan, path_to},
+        JsonGlob,
+    };
 
     // enum Action {
     //     Acquire {
@@ -66,11 +69,22 @@ mod tests {
             })
             .boxed()
     }
+    fn arb_model_paths(max_size: usize) -> impl Strategy<Value = JsonGlob> {
+        proptest::collection::vec("[a-z*]", 1..max_size).prop_map(|a_s| {
+            a_s.into_iter()
+                .fold(String::new(), |mut s, x| {
+                    s.push_str(&x);
+                    s
+                })
+                .parse::<JsonGlob>()
+                .unwrap()
+        })
+    }
 
     fn arb_lock_info(session_bound: u64, ptr_max_size: usize) -> BoxedStrategy<LockInfo> {
         arb_handle_id(session_bound)
             .prop_flat_map(move |handle_id| {
-                arb_json_ptr(ptr_max_size).prop_flat_map(move |ptr| {
+                arb_model_paths(ptr_max_size).prop_flat_map(move |ptr| {
                     let handle_id = handle_id.clone();
                     arb_lock_type().prop_map(move |ty| LockInfo {
                         handle_id: handle_id.clone(),
@@ -81,19 +95,39 @@ mod tests {
             })
             .boxed()
     }
+    fn arb_lock_infos(
+        session_bound: u64,
+        ptr_max_size: usize,
+        max_size: usize,
+    ) -> BoxedStrategy<LockInfos> {
+        arb_handle_id(session_bound)
+            .prop_flat_map(move |handle_id| {
+                proptest::collection::vec(arb_lock_info(session_bound, ptr_max_size), 1..max_size)
+                    .prop_map(move |xs| {
+                        xs.into_iter()
+                            .map(|mut x| {
+                                x.handle_id = handle_id.clone();
+                                x
+                            })
+                            .collect::<Vec<_>>()
+                    })
+            })
+            .prop_map(LockInfos)
+            .boxed()
+    }
 
     prop_compose! {
-        fn arb_request(session_bound: u64, ptr_max_size: usize)(li in arb_lock_info(session_bound, ptr_max_size)) -> (Request, CancelGuard) {
+        fn arb_request(session_bound: u64, ptr_max_size: usize)(lis in arb_lock_infos(session_bound, ptr_max_size, 10)) -> (Request, CancelGuard) {
             let (cancel_send, cancel_recv) = oneshot::channel();
             let (guard_send, guard_recv) = oneshot::channel();
             let r = Request {
-                lock_info: li.clone(),
+                lock_info: lis.clone(),
                 cancel: Some(cancel_recv),
                 completion: guard_send,
 
             };
             let c = CancelGuard {
-                lock_info: Some(li),
+                lock_info: Some(lis),
                 channel: Some(cancel_send),
                 recv: guard_recv,
             };
@@ -152,7 +186,12 @@ mod tests {
             let mut queue = VecDeque::default();
             for i in 0..n {
                 let mut req = arb_request(1, 5).new_tree(&mut runner).unwrap().current();
-                req.0.lock_info.handle_id.id = i;
+                match req.0.lock_info {
+                    LockInfos(ref mut li) => {
+                        li[0].handle_id.id = i;
+                    }
+                    _ => unreachable!(),
+                }
                 let dep = if i == n - 1 { 0 } else { i + 1 };
                 queue.push_back((
                     req.0,
@@ -165,7 +204,9 @@ mod tests {
                 c.push_back(req.1);
             }
             for i in &queue {
-                println!("{} => {:?}", i.0.lock_info.handle_id.id, i.1)
+                for info in i.0.lock_info.as_vec() {
+                    println!("{} => {:?}", info.handle_id.id, i.1)
+                }
             }
             let set = deadlock_scan(&queue);
             println!("{:?}", set);
@@ -190,7 +231,7 @@ mod tests {
                     let h = arb_handle_id(5).new_tree(&mut runner).unwrap().current();
                     let i = (0..queue.len()).new_tree(&mut runner).unwrap().current();
                     if let Some((r, s)) = queue.get_mut(i) {
-                        if r.lock_info.handle_id != h {
+                        if r.lock_info.as_vec().iter().all(|x| x.handle_id != h) {
                             s.insert(h);
                         } else {
                             continue;
@@ -199,24 +240,34 @@ mod tests {
                 } else {
                     // add new node
                     let (r, c) = arb_request(5, 5).new_tree(&mut runner).unwrap().current();
+                    let request_infos = r.lock_info.as_vec();
                     // but only if the session hasn't yet been used
-                    if queue
-                        .iter()
-                        .all(|(qr, _)| qr.lock_info.handle_id.id != r.lock_info.handle_id.id)
-                    {
+                    if queue.iter().all(|(qr, _)| {
+                        for qr_info in qr.lock_info.as_vec() {
+                            for request_info in request_infos.iter() {
+                                if qr_info.handle_id == request_info.handle_id {
+                                    return false;
+                                }
+                            }
+                        }
+                        true
+                    }) {
                         queue.push_back((r, ordset![]));
                         cancels.push_back(c);
                     }
                 }
                 let cycle = deadlock_scan(&queue)
                     .into_iter()
-                    .map(|r| &r.lock_info.handle_id)
+                    .flat_map(|x| x.lock_info.as_vec())
+                    .map(|r| &r.handle_id)
                     .collect::<OrdSet<&HandleId>>();
                 if !cycle.is_empty() {
                     println!("Cycle: {:?}", cycle);
                     for (r, s) in &queue {
-                        if cycle.contains(&r.lock_info.handle_id) {
-                            assert!(s.iter().any(|h| cycle.contains(h)))
+                        for info in r.lock_info.as_vec() {
+                            if cycle.contains(&info.handle_id) {
+                                assert!(s.iter().any(|h| cycle.contains(h)))
+                            }
                         }
                     }
                     break;
@@ -272,7 +323,7 @@ mod tests {
 
     proptest! {
         #[test]
-        fn trie_lock_inverse_identity(lock_order in proptest::collection::vec(arb_lock_info(1, 5), 1..30)) {
+        fn trie_lock_inverse_identity(lock_order in proptest::collection::vec(arb_lock_infos(1, 5, 10), 1..30)) {
             use crate::locker::trie::LockTrie;
             use rand::seq::SliceRandom;
             let mut trie = LockTrie::default();
@@ -280,10 +331,12 @@ mod tests {
                 trie.try_lock(i).expect(&format!("try_lock failed: {}", i));
             }
             let mut release_order = lock_order.clone();
-            let slice: &mut [LockInfo] = &mut release_order[..];
+            let slice: &mut [LockInfos] = &mut release_order[..];
             slice.shuffle(&mut rand::thread_rng());
-            for i in &release_order {
-                trie.unlock(i);
+            for is in &release_order {
+                for i in is.as_vec() {
+                    trie.unlock(i);
+                }
             }
             prop_assert_eq!(trie, LockTrie::default())
         }
@@ -291,7 +344,7 @@ mod tests {
 
     proptest! {
         #[test]
-        fn enforcer_lock_inverse_identity(lock_order in proptest::collection::vec(arb_lock_info(1,3), 1..30)) {
+        fn enforcer_lock_inverse_identity(lock_order in proptest::collection::vec(arb_lock_infos(1,3,10), 1..30)) {
             use crate::locker::order_enforcer::LockOrderEnforcer;
             use rand::seq::SliceRandom;
             let mut enforcer = LockOrderEnforcer::new();
@@ -299,11 +352,13 @@ mod tests {
                 enforcer.try_insert(i);
             }
             let mut release_order = lock_order.clone();
-            let slice: &mut [LockInfo] = &mut release_order[..];
+            let slice: &mut [LockInfos] = &mut release_order[..];
             slice.shuffle(&mut rand::thread_rng());
             prop_assert!(enforcer != LockOrderEnforcer::new());
-            for i in &release_order {
-                enforcer.remove(i);
+            for is in &release_order {
+                for i in is.as_vec() {
+                    enforcer.remove(i);
+                }
             }
             prop_assert_eq!(enforcer, LockOrderEnforcer::new());
         }
@@ -318,7 +373,7 @@ mod tests {
             let li0 = LockInfo {
                 handle_id: s0,
                 ty: LockType::Exist,
-                ptr: ptr0.clone()
+                ptr: ptr0.clone().into()
             };
             println!("{}", ptr0);
             ptr0.append(&ptr1);
@@ -326,11 +381,11 @@ mod tests {
             let li1 = LockInfo {
                 handle_id: s1,
                 ty: LockType::Write,
-                ptr: ptr0.clone()
+                ptr: ptr0.clone().into()
             };
-            trie.try_lock(&li0).unwrap();
+            trie.try_lock(&LockInfos(vec![li0])).unwrap();
             println!("{:?}", trie);
-            trie.try_lock(&li1).expect("E locks don't prevent child locks");
+            trie.try_lock(&LockInfos(vec![li1])).expect("E locks don't prevent child locks");
         }
     }
 
