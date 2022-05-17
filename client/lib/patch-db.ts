@@ -1,4 +1,4 @@
-import { merge, Observable, Subject, Subscription } from 'rxjs'
+import { merge, Observable, ReplaySubject, Subject, Subscription } from 'rxjs'
 import { Store } from './store'
 import { DBCache, Http } from './types'
 import { RPCError } from './source/ws-source'
@@ -8,7 +8,7 @@ export class PatchDB<T> {
   public store: Store<T> = new Store(this.http, this.initialCache)
   public connectionError$ = new Subject<Error>()
   public rpcError$ = new Subject<RPCError>()
-  public cache$ = new Subject<DBCache<T>>()
+  public cache$ = new ReplaySubject<DBCache<T>>(1)
 
   private updatesSub?: Subscription
   private sourcesSub = this.sources$.subscribe(sources => {
