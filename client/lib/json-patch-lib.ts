@@ -1,8 +1,4 @@
-import { PatchOp } from './types'
-
-export interface Validator<T> {
-  (operation: Operation, index: number, doc: T, existingPathFragment: string): void
-}
+import { DBCache, PatchOp } from './types'
 
 export interface BaseOperation {
   path: string
@@ -22,68 +18,68 @@ export interface ReplaceOperation<T> extends BaseOperation {
   value: T
 }
 
-export type Doc = { [key: string]: any }
+export type Operation<T> = AddOperation<T> | RemoveOperation | ReplaceOperation<T>
 
-export type Operation = AddOperation<any> | RemoveOperation | ReplaceOperation<any>
+export function getValueByPointer<T extends Record<string, T>> (data: T, pointer: string): any {
+  if (pointer === '/') return data
 
-export function getValueByPointer (doc: any, pointer: string): any {
-  if (pointer === '/') return doc
-  const pathArr = pointer.split('/')
-  pathArr.shift()
   try {
-    return pathArr.reduce((acc, next) => acc[next], doc)
+    return jsonPathToKeyArray(pointer).reduce((acc, next) => acc[next], data)
   } catch (e) {
     return undefined
   }
 }
 
-export function applyOperation (doc: Doc, op: Operation): Operation | null {
-  let undo: Operation | null = null
-  const pathArr = op.path.split('/')
-  pathArr.shift()
-  pathArr.reduce((node, key, i) => {
-    if (!isObject) {
-      throw Error('patch cannot be applied.  Path contains non object')
-    }
+export function applyOperation<T> (
+  doc: DBCache<Record<string, any>>,
+  { path, op, value }: Operation<T> & { value?: T },
+): Operation<T> | null {
+  const current = getValueByPointer(doc.data, path)
+  const remove = { op: PatchOp.REMOVE, path} as const
+  const add = { op: PatchOp.ADD, path, value: current} as const
+  const replace = { op: PatchOp.REPLACE, path, value: current } as const
 
-    if (i < pathArr.length - 1) {
-      // iterate node
-      return node[key]
-    }
+  doc.data = recursiveApply(doc.data, jsonPathToKeyArray(path), value)
 
-    // if last key
-    const curVal = node[key]
-    if (op.op === 'add' || op.op === 'replace') {
-      node[key] = op.value
-      if (curVal) {
-        undo = {
-          op: PatchOp.REPLACE,
-          path: op.path,
-          value: curVal,
-        }
-      } else {
-        undo = {
-          op: PatchOp.REMOVE,
-          path: op.path,
-        }
-      }
-    } else {
-      delete node[key]
-      if (curVal) {
-        undo = {
-          op: PatchOp.ADD,
-          path: op.path,
-          value: curVal,
-        }
-      }
-    }
-  }, doc)
-
-  return undo
+  switch (op) {
+    case PatchOp.REMOVE:
+      return current === undefined
+        ? null
+        : add
+    case PatchOp.REPLACE:
+    case PatchOp.ADD:
+      return current === undefined
+        ? remove
+        : replace
+  }
 }
 
-function isObject (val: any): val is Doc {
+function recursiveApply<T extends Record<string, T>> (data: T, path: readonly string[], value?: any): T {
+  if (!path.length) return value
+
+  if (!isObject(data)) {
+    throw Error('Patch cannot be applied. Path contains non object')
+  }
+
+  const updated = recursiveApply(data[path[0]], path.slice(1), value)
+  const result = {
+    ...data,
+    [path[0]]: updated,
+  }
+
+  if (updated === undefined) {
+    delete result[path[0]]
+  }
+
+  return result
+}
+
+function isObject (val: any): val is Record<string, unknown> {
   return typeof val === 'object' && !Array.isArray(val) && val !== null
+}
+
+function jsonPathToKeyArray (path: string): string[] {
+  return path.split('/').slice(1)
 }
 
 
