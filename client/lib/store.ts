@@ -33,6 +33,7 @@ export class Store<T extends { [key: string]: any }> {
     const path = `/${args.join('/')}`
     if (!this.watchedNodes[path]) {
       this.watchedNodes[path] = new ReplaySubject(1)
+      this.updateValue(path)
     }
     return this.watchedNodes[path].asObservable()
   }
