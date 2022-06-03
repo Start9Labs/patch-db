@@ -121,7 +121,11 @@ where
         self.set_(db_handle, new_value, &[]).await
     }
     pub async fn get<DH: DbHandle>(&self, db_handle: &mut DH) -> Result<T, Error> {
-        self.get_(db_handle, &[]).await.and_then(|x| x.map(Ok).unwrap_or_else(|| serde_json::from_value(serde_json::Value::Null).map_err(Error::JSON)))
+        self.get_(db_handle, &[]).await.and_then(|x| {
+            x.map(Ok).unwrap_or_else(|| {
+                serde_json::from_value(serde_json::Value::Null).map_err(Error::JSON)
+            })
+        })
     }
 }
 impl<T> LockReceipt<T, String>
