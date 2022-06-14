@@ -62,9 +62,7 @@ export class Store<T extends { [key: string]: any }> {
   private updateValue(path: string): void {
     const value = getValueByPointer(this.cache.data, path)
 
-    if (value !== undefined) {
-      this.watchedNodes[path].next(value)
-    }
+    this.watchedNodes[path].next(value)
   }
 
   private handleRevision(revision: Revision): void {
