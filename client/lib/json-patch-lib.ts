@@ -75,7 +75,7 @@ function recursiveApply<T extends Record<string, T>> (data: T, path: readonly st
 }
 
 function isObject (val: any): val is Record<string, unknown> {
-  return typeof val === 'object' && !Array.isArray(val) && val !== null
+  return typeof val === 'object' && val !== null
 }
 
 function jsonPathToKeyArray (path: string): string[] {
