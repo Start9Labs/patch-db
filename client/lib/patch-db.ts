@@ -1,4 +1,5 @@
-import { merge, Observable, ReplaySubject, Subject, Subscription } from 'rxjs'
+import { merge, Observable, ReplaySubject, Subject } from 'rxjs'
+import { switchMap } from 'rxjs/operators'
 import { Store } from './store'
 import { DBCache, Http } from './types'
 import { RPCError } from './source/ws-source'
@@ -10,22 +11,20 @@ export class PatchDB<T> {
   public rpcError$ = new Subject<RPCError>()
   public cache$ = new ReplaySubject<DBCache<T>>(1)
 
-  private updatesSub?: Subscription
-  private sourcesSub = this.sources$.subscribe(sources => {
-    this.updatesSub = merge(...sources.map(s => s.watch$(this.store))).subscribe({
-      next: (res) => {
-        if ('result' in res) {
-          this.store.update(res.result)
-          this.cache$.next(this.store.cache)
-        }
-        else {
-          this.rpcError$.next(res)
-        }
-      },
-      error: (e) => {
-        this.connectionError$.next(e)
-      },
-    })
+  private sub = this.sources$.pipe(
+    switchMap(sources => merge(...sources.map(s => s.watch$(this.store)))),
+  ).subscribe({
+    next: (res) => {
+      if ('result' in res) {
+        this.store.update(res.result)
+        this.cache$.next(this.store.cache)
+      } else {
+        this.rpcError$.next(res)
+      }
+    },
+    error: (e) => {
+      this.connectionError$.next(e)
+    },
   })
 
   constructor (
@@ -35,7 +34,6 @@ export class PatchDB<T> {
   ) { }
 
   clean () {
-    this.sourcesSub.unsubscribe()
-    this.updatesSub?.unsubscribe()
+    this.sub.unsubscribe()
   }
 }
