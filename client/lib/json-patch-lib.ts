@@ -55,6 +55,8 @@ export function applyOperation<T> (
 }
 
 function recursiveApply<T extends Record<string, any> | any[]> (data: T, path: readonly string[], op: PatchOp, value?: any): T {
+  if (!path.length) return value
+  
   // object
   if (isObject(data)) {
     return recursiveApplyObject(data, path, op, value)
@@ -67,8 +69,6 @@ function recursiveApply<T extends Record<string, any> | any[]> (data: T, path: r
 }
 
 function recursiveApplyObject<T extends Record<string, any>> (data: T, path: readonly string[], op: PatchOp, value?: any): T {
-  if (!path.length) return value
-
   const updated = recursiveApply(data[path[0]], path.slice(1), op, value)
   const result = {
     ...data,
@@ -83,8 +83,6 @@ function recursiveApplyObject<T extends Record<string, any>> (data: T, path: rea
 }
 
 function recursiveApplyArray<T extends any[]> (data: T, path: readonly string[], op: PatchOp, value?: any): T {
-  if (!path.length) return value
-
   const index = parseInt(path[0])
 
   const updated = recursiveApply(data[index], path.slice(1), op, value)
