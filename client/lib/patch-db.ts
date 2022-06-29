@@ -1,5 +1,5 @@
-import { merge, Observable, ReplaySubject, Subject } from 'rxjs'
-import { switchMap } from 'rxjs/operators'
+import { EMPTY, merge, Observable, ReplaySubject, Subject } from 'rxjs'
+import { catchError, switchMap } from 'rxjs/operators'
 import { Store } from './store'
 import { DBCache, Http } from './types'
 import { RPCError } from './source/ws-source'
@@ -12,19 +12,20 @@ export class PatchDB<T> {
   public cache$ = new ReplaySubject<DBCache<T>>(1)
 
   private sub = this.sources$.pipe(
-    switchMap(sources => merge(...sources.map(s => s.watch$(this.store)))),
-  ).subscribe({
-    next: (res) => {
-      if ('result' in res) {
-        this.store.update(res.result)
-        this.cache$.next(this.store.cache)
-      } else {
-        this.rpcError$.next(res)
-      }
-    },
-    error: (e) => {
-      this.connectionError$.next(e)
-    },
+    switchMap(sources => merge(...sources.map(s => s.watch$(this.store))).pipe(
+      catchError(e => {
+        this.connectionError$.next(e)
+
+        return EMPTY
+      }),
+    )),
+  ).subscribe((res) => {
+    if ('result' in res) {
+      this.store.update(res.result)
+      this.cache$.next(this.store.cache)
+    } else {
+      this.rpcError$.next(res)
+    }
   })
 
   constructor (
