@@ -10,9 +10,11 @@
     "build": "tsc"
   },
   "dependencies": {
-    "rxjs": "6.6.7",
     "sorted-btree": "1.5.0",
     "uuid": "8.3.2"
+  },
+  "peerDependencies": {
+    "rxjs": ">=6.0.0"
   },
   "devDependencies": {
     "@types/node": "16.4.13",
