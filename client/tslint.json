@@ -2,17 +2,9 @@
   "rules": {
     "no-unused-variable": true,
     "no-unused-expression": true,
-    "space-before-function-paren": true,
-    "semicolon": [
-      true,
-      "never"
-    ],
+    "semicolon": [true, "never"],
     "no-trailing-whitespace": true,
-    "indent": [
-      true,
-      "spaces",
-      2
-    ],
+    "indent": [true, "spaces", 2],
     "whitespace": [
       true,
       "check-branch",
@@ -24,8 +16,7 @@
       "check-type",
       "check-typecast",
       "check-type-operator",
-      "check-preblock",
-      "check-postbrace"
+      "check-preblock"
     ],
     "trailing-comma": [
       true,
@@ -39,9 +30,6 @@
         "singleline": "never"
       }
     ],
-    "quotemark": [
-      true,
-      "single"
-    ]
+    "quotemark": [true, "single"]
   }
 }

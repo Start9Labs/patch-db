@@ -18,9 +18,15 @@ export interface ReplaceOperation<T> extends BaseOperation {
   value: T
 }
 
-export type Operation<T> = AddOperation<T> | RemoveOperation | ReplaceOperation<T>
+export type Operation<T> =
+  | AddOperation<T>
+  | RemoveOperation
+  | ReplaceOperation<T>
 
-export function getValueByPointer<T extends Record<string, T>> (data: T, pointer: string): any {
+export function getValueByPointer<T extends Record<string, T>>(
+  data: T,
+  pointer: string,
+): any {
   if (pointer === '/') return data
 
   try {
@@ -30,37 +36,38 @@ export function getValueByPointer<T extends Record<string, T>> (data: T, pointer
   }
 }
 
-export function applyOperation<T> (
+export function applyOperation<T>(
   doc: DBCache<Record<string, any>>,
   { path, op, value }: Operation<T> & { value?: T },
 ): Operation<T> | null {
   const current = getValueByPointer(doc.data, path)
-  const remove = { op: PatchOp.REMOVE, path} as const
-  const add = { op: PatchOp.ADD, path, value: current} as const
+  const remove = { op: PatchOp.REMOVE, path } as const
+  const add = { op: PatchOp.ADD, path, value: current } as const
   const replace = { op: PatchOp.REPLACE, path, value: current } as const
 
   doc.data = recursiveApply(doc.data, jsonPathToKeyArray(path), op, value)
 
   switch (op) {
     case PatchOp.REMOVE:
-      return current === undefined
-        ? null
-        : add
+      return current === undefined ? null : add
     case PatchOp.REPLACE:
     case PatchOp.ADD:
-      return current === undefined
-        ? remove
-        : replace
+      return current === undefined ? remove : replace
   }
 }
 
-function recursiveApply<T extends Record<string, any> | any[]> (data: T, path: readonly string[], op: PatchOp, value?: any): T {
+function recursiveApply<T extends Record<string, any> | any[]>(
+  data: T,
+  path: readonly string[],
+  op: PatchOp,
+  value?: any,
+): T {
   if (!path.length) return value
-  
+
   // object
   if (isObject(data)) {
     return recursiveApplyObject(data, path, op, value)
-  // array
+    // array
   } else if (Array.isArray(data)) {
     return recursiveApplyArray(data, path, op, value)
   } else {
@@ -68,7 +75,12 @@ function recursiveApply<T extends Record<string, any> | any[]> (data: T, path: r
   }
 }
 
-function recursiveApplyObject<T extends Record<string, any>> (data: T, path: readonly string[], op: PatchOp, value?: any): T {
+function recursiveApplyObject<T extends Record<string, any>>(
+  data: T,
+  path: readonly string[],
+  op: PatchOp,
+  value?: any,
+): T {
   const updated = recursiveApply(data[path[0]], path.slice(1), op, value)
   const result = {
     ...data,
@@ -82,7 +94,12 @@ function recursiveApplyObject<T extends Record<string, any>> (data: T, path: rea
   return result
 }
 
-function recursiveApplyArray<T extends any[]> (data: T, path: readonly string[], op: PatchOp, value?: any): T {
+function recursiveApplyArray<T extends any[]>(
+  data: T,
+  path: readonly string[],
+  op: PatchOp,
+  value?: any,
+): T {
   const index = parseInt(path[0])
 
   const updated = recursiveApply(data[index], path.slice(1), op, value)
@@ -98,12 +115,10 @@ function recursiveApplyArray<T extends any[]> (data: T, path: readonly string[],
   return result
 }
 
-function isObject (val: any): val is Record<string, unknown> {
+function isObject(val: any): val is Record<string, unknown> {
   return typeof val === 'object' && val !== null && !Array.isArray(val)
 }
 
-function jsonPathToKeyArray (path: string): string[] {
+function jsonPathToKeyArray(path: string): string[] {
   return path.split('/').slice(1)
 }
-
-

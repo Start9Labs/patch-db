@@ -1,16 +1,18 @@
 import { Observable } from 'rxjs'
-import { webSocket, WebSocketSubject, WebSocketSubjectConfig } from 'rxjs/webSocket'
+import {
+  webSocket,
+  WebSocketSubject,
+  WebSocketSubjectConfig,
+} from 'rxjs/webSocket'
 import { Update } from '../types'
 import { Source } from './source'
 
 export class WebsocketSource<T> implements Source<T> {
   private websocket$: WebSocketSubject<RPCResponse<Update<T>>> | undefined
 
-  constructor (
-    private readonly url: string,
-  ) { }
+  constructor(private readonly url: string) {}
 
-  watch$ (): Observable<RPCResponse<Update<T>>> {
+  watch$(): Observable<RPCResponse<Update<T>>> {
     const fullConfig: WebSocketSubjectConfig<RPCResponse<Update<T>>> = {
       url: this.url,
       openObserver: {
@@ -48,7 +50,7 @@ class RpcError {
   message: string
   details: string
 
-  constructor (e: RPCError['error']) {
+  constructor(e: RPCError['error']) {
     this.code = e.code
     this.message = e.message
     this.details = e.data.details

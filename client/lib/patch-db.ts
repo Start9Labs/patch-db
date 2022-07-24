@@ -11,30 +11,34 @@ export class PatchDB<T> {
   public rpcError$ = new Subject<RPCError>()
   public cache$ = new ReplaySubject<DBCache<T>>(1)
 
-  private sub = this.sources$.pipe(
-    switchMap(sources => merge(...sources.map(s => s.watch$(this.store))).pipe(
-      catchError(e => {
-        this.connectionError$.next(e)
+  private sub = this.sources$
+    .pipe(
+      switchMap(sources =>
+        merge(...sources.map(s => s.watch$(this.store))).pipe(
+          catchError(e => {
+            this.connectionError$.next(e)
 
-        return EMPTY
-      }),
-    )),
-  ).subscribe((res) => {
-    if ('result' in res) {
-      this.store.update(res.result)
-      this.cache$.next(this.store.cache)
-    } else {
-      this.rpcError$.next(res)
-    }
-  })
+            return EMPTY
+          }),
+        ),
+      ),
+    )
+    .subscribe(res => {
+      if ('result' in res) {
+        this.store.update(res.result)
+        this.cache$.next(this.store.cache)
+      } else {
+        this.rpcError$.next(res)
+      }
+    })
 
-  constructor (
+  constructor(
     private readonly sources$: Observable<Source<T>[]>,
     private readonly http: Http<T>,
     private readonly initialCache: DBCache<T>,
-  ) { }
+  ) {}
 
-  clean () {
+  clean() {
     this.sub.unsubscribe()
   }
 }
