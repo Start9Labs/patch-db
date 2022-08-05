@@ -9,18 +9,11 @@ export interface StashEntry {
 }
 
 export class Store<T extends { [key: string]: any }> {
-  cache: DBCache<T>
-  sequence$: BehaviorSubject<number>
+  readonly sequence$ = new BehaviorSubject(this.cache.sequence)
   private watchedNodes: { [path: string]: ReplaySubject<any> } = {}
   private stash = new BTree<number, StashEntry>()
 
-  constructor(
-    private readonly http: Http<T>,
-    private readonly initialCache: DBCache<T>,
-  ) {
-    this.cache = this.initialCache
-    this.sequence$ = new BehaviorSubject(initialCache.sequence)
-  }
+  constructor(private readonly http: Http<T>, public cache: DBCache<T>) {}
 
   watch$(): Observable<T>
   watch$<P1 extends keyof T>(p1: P1): Observable<NonNullable<T[P1]>>

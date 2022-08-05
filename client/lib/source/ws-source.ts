@@ -1,27 +1,24 @@
 import { Observable } from 'rxjs'
-import {
-  webSocket,
-  WebSocketSubject,
-  WebSocketSubjectConfig,
-} from 'rxjs/webSocket'
+import { webSocket, WebSocketSubject } from 'rxjs/webSocket'
 import { Update } from '../types'
 import { Source } from './source'
 
 export class WebsocketSource<T> implements Source<T> {
-  private websocket$: WebSocketSubject<RPCResponse<Update<T>>> | undefined
+  private websocket$: WebSocketSubject<RPCResponse<Update<T>>> = webSocket({
+    url: this.url,
+    openObserver: {
+      next: () => {
+        this.websocket$.next(this.document.cookie as any)
+      },
+    },
+  })
 
-  constructor(private readonly url: string) {}
+  constructor(
+    private readonly url: string,
+    private readonly document: Document,
+  ) {}
 
   watch$(): Observable<RPCResponse<Update<T>>> {
-    const fullConfig: WebSocketSubjectConfig<RPCResponse<Update<T>>> = {
-      url: this.url,
-      openObserver: {
-        next: () => {
-          this.websocket$!.next(document.cookie as any)
-        },
-      },
-    }
-    this.websocket$ = webSocket(fullConfig)
     return this.websocket$
   }
 }
