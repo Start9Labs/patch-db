@@ -1,10 +1,10 @@
 import { Observable } from 'rxjs'
-import { webSocket, WebSocketSubject } from 'rxjs/webSocket'
+import { webSocket } from 'rxjs/webSocket'
 import { Update } from '../types'
 import { Source } from './source'
 
 export class WebsocketSource<T> implements Source<T> {
-  private websocket$: WebSocketSubject<RPCResponse<Update<T>>> = webSocket({
+  private websocket$ = webSocket<RPCResponse<Update<T>>>({
     url: this.url,
     openObserver: {
       next: () => {
@@ -15,7 +15,8 @@ export class WebsocketSource<T> implements Source<T> {
 
   constructor(
     private readonly url: string,
-    private readonly document: Document,
+    // TODO: Remove fallback after client app is updated
+    private readonly document: Document = document,
   ) {}
 
   watch$(): Observable<RPCResponse<Update<T>>> {
