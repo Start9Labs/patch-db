@@ -1,18 +1,9 @@
-import { Observable } from 'rxjs'
-import { webSocket } from 'rxjs/webSocket'
+import { Observable, timeout } from 'rxjs'
+import { webSocket, WebSocketSubject } from 'rxjs/webSocket'
 import { Update } from '../types'
 import { Source } from './source'
 
 export class WebsocketSource<T> implements Source<T> {
-  private websocket$ = webSocket<RPCResponse<Update<T>>>({
-    url: this.url,
-    openObserver: {
-      next: () => {
-        this.websocket$.next(this.document.cookie as any)
-      },
-    },
-  })
-
   constructor(
     private readonly url: string,
     // TODO: Remove fallback after client app is updated
@@ -20,7 +11,14 @@ export class WebsocketSource<T> implements Source<T> {
   ) {}
 
   watch$(): Observable<RPCResponse<Update<T>>> {
-    return this.websocket$
+    const stream$: WebSocketSubject<RPCResponse<Update<T>>> = webSocket({
+      url: this.url,
+      openObserver: {
+        next: () => stream$.next(this.document.cookie as any),
+      },
+    })
+
+    return stream$.pipe(timeout(60000))
   }
 }
 
