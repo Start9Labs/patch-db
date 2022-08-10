@@ -18,7 +18,7 @@ export class WebsocketSource<T> implements Source<T> {
       },
     })
 
-    return stream$.pipe(timeout(60000))
+    return stream$.pipe(timeout({ first: 60000 }))
   }
 }
 

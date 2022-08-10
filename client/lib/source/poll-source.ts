@@ -1,14 +1,5 @@
-import {
-  BehaviorSubject,
-  concat,
-  from,
-  ignoreElements,
-  Observable,
-  of,
-  repeatWhen,
-  timer,
-} from 'rxjs'
-import { concatMap, map, switchMap, take, tap } from 'rxjs/operators'
+import { from, Observable, of, repeatWhen, timer } from 'rxjs'
+import { concatMap, map, take } from 'rxjs/operators'
 import { Store } from '../store'
 import { Http, Update } from '../types'
 import { Source } from './source'
