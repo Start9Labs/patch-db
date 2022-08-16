@@ -1,5 +1,5 @@
-import { from, Observable, of, repeatWhen, timer } from 'rxjs'
-import { concatMap, map, take } from 'rxjs/operators'
+import { from, Observable, of, repeat } from 'rxjs'
+import { concatMap, take } from 'rxjs/operators'
 import { Store } from '../store'
 import { Http, Update } from '../types'
 import { Source } from './source'
@@ -20,7 +20,7 @@ export class PollSource<T> implements Source<T> {
       take(1),
       // convert Revision[] it into Observable<Revision>. Convert Dump<T> into Observable<Dump<T>>
       concatMap(res => (Array.isArray(res) ? from(res) : of(res))),
-      repeatWhen(() => timer(this.pollConfig.cooldown)),
+      repeat({ delay: this.pollConfig.cooldown }),
     )
   }
 }
