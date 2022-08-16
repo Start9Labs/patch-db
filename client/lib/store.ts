@@ -100,10 +100,8 @@ export class Store<T extends { [key: string]: any }> {
 
   update(update: Update<T>): void {
     if (this.isRevision(update)) {
-      // if old or known, re-trigger the latest revision
-      if (update.id <= this.cache.sequence || this.stash.get(update.id)) {
-        this.updateSequence(this.cache.sequence)
-      } else {
+      // Handle revision if new and not known
+      if (update.id > this.cache.sequence && !this.stash.get(update.id)) {
         this.handleRevision(update)
       }
     } else {
