@@ -7,6 +7,6 @@ export class WebsocketSource<T> implements Source<T> {
   constructor(private readonly url: string) {}
 
   watch$(): Observable<Update<T>> {
-    return webSocket<Update<T>>(this.url).pipe(timeout({ first: 60000 }))
+    return webSocket<Update<T>>(this.url).pipe(timeout({ first: 21000 }))
   }
 }
