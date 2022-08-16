@@ -14,12 +14,20 @@ export class PollSource<T> implements Source<T> {
     private readonly http: Http<T>,
   ) {}
 
-  watch$({ sequence$ }: Store<T>): Observable<Update<T>> {
+  watch$({ sequence$ }: Store<T>): Observable<Update<T> | null> {
     return sequence$.pipe(
       concatMap(seq => this.http.getRevisions(seq)),
       take(1),
-      // convert Revision[] it into Observable<Revision>. Convert Dump<T> into Observable<Dump<T>>
-      concatMap(res => (Array.isArray(res) ? from(res) : of(res))),
+      concatMap(res => {
+        // If Revision[]
+        if (Array.isArray(res)) {
+          // Convert Revision[] it into Observable<Revision> OR return null
+          return res.length ? from(res) : of(null)
+          // If Dump<T>
+        }
+        // Convert Dump<T> into Observable<Dump<T>>
+        return of(res)
+      }),
       repeat({ delay: this.pollConfig.cooldown }),
     )
   }

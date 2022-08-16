@@ -1,5 +1,5 @@
 import { EMPTY, map, merge, Observable, shareReplay, Subject } from 'rxjs'
-import { catchError, switchMap } from 'rxjs/operators'
+import { catchError, filter, switchMap, tap } from 'rxjs/operators'
 import { Store } from './store'
 import { DBCache, Http } from './types'
 import { Source } from './source/source'
@@ -17,9 +17,10 @@ export class PatchDB<T> {
         }),
       ),
     ),
+    tap(_ => this.connectionError$.next(null)),
+    filter(Boolean),
     map(res => {
       this.store.update(res)
-
       return this.store.cache
     }),
     shareReplay(1),
