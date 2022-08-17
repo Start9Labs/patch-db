@@ -1,4 +1,4 @@
-import { DBCache, Dump, Http, Revision, Update } from './types'
+import { DBCache, Dump, Revision, Update } from './types'
 import { BehaviorSubject, Observable, ReplaySubject } from 'rxjs'
 import { applyOperation, getValueByPointer, Operation } from './json-patch-lib'
 import BTree from 'sorted-btree'
@@ -13,7 +13,7 @@ export class Store<T extends { [key: string]: any }> {
   private watchedNodes: { [path: string]: ReplaySubject<any> } = {}
   private stash = new BTree<number, StashEntry>()
 
-  constructor(private readonly http: Http<T>, public cache: DBCache<T>) {}
+  constructor(public cache: DBCache<T>) {}
 
   watch$(): Observable<T>
   watch$<P1 extends keyof T>(p1: P1): Observable<NonNullable<T[P1]>>
@@ -127,14 +127,7 @@ export class Store<T extends { [key: string]: any }> {
   }
 
   private handleRevision(revision: Revision): void {
-    // stash the revision
     this.stash.set(revision.id, { revision, undo: [] })
-
-    // if revision is futuristic, fetch missing revisions
-    if (revision.id > this.cache.sequence + 1) {
-      this.http.getRevisions(this.cache.sequence)
-    }
-
     this.processStashed(revision.id)
   }
 

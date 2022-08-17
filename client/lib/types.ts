@@ -18,11 +18,6 @@ export enum PatchOp {
   REPLACE = 'replace',
 }
 
-export interface Http<T> {
-  getRevisions(since: number): Promise<Revision[] | Dump<T>>
-  getDump(): Promise<Dump<T>>
-}
-
 export interface Bootstrapper<T> {
   init(): Promise<DBCache<T>>
   update(cache: DBCache<T>): Promise<void>
