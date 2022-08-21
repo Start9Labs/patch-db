@@ -1,5 +1,5 @@
-import { DBCache, Dump, Http, Revision, Update } from './types'
-import { BehaviorSubject, Observable, ReplaySubject } from 'rxjs'
+import { DBCache, Dump, Revision, Update } from './types'
+import { BehaviorSubject, Observable } from 'rxjs'
 import { applyOperation, getValueByPointer, Operation } from './json-patch-lib'
 import BTree from 'sorted-btree'
 
@@ -9,18 +9,11 @@ export interface StashEntry {
 }
 
 export class Store<T extends { [key: string]: any }> {
-  cache: DBCache<T>
-  sequence$: BehaviorSubject<number>
-  private watchedNodes: { [path: string]: ReplaySubject<any> } = {}
+  readonly sequence$ = new BehaviorSubject(this.cache.sequence)
+  private watchedNodes: { [path: string]: BehaviorSubject<any> } = {}
   private stash = new BTree<number, StashEntry>()
 
-  constructor(
-    private readonly http: Http<T>,
-    private readonly initialCache: DBCache<T>,
-  ) {
-    this.cache = this.initialCache
-    this.sequence$ = new BehaviorSubject(initialCache.sequence)
-  }
+  constructor(public cache: DBCache<T>) {}
 
   watch$(): Observable<T>
   watch$<P1 extends keyof T>(p1: P1): Observable<NonNullable<T[P1]>>
@@ -98,18 +91,32 @@ export class Store<T extends { [key: string]: any }> {
   >
   watch$(...args: (string | number)[]): Observable<any> {
     const path = `/${args.join('/')}`
-    if (!this.watchedNodes[path]) {
-      this.watchedNodes[path] = new ReplaySubject(1)
+
+    return new Observable(subscriber => {
+      const value = getValueByPointer(this.cache.data, path)
+      const source = this.watchedNodes[path] || new BehaviorSubject(value)
+      const subscription = source.subscribe(subscriber)
+
+      this.watchedNodes[path] = source
       this.updateValue(path)
-    }
-    return this.watchedNodes[path].asObservable()
+
+      return () => {
+        subscription.unsubscribe()
+
+        if (!source.observed) {
+          source.complete()
+          delete this.watchedNodes[path]
+        }
+      }
+    })
   }
 
   update(update: Update<T>): void {
     if (this.isRevision(update)) {
-      // if old or known, return
-      if (update.id <= this.cache.sequence || this.stash.get(update.id)) return
-      this.handleRevision(update)
+      // Handle revision if new and not known
+      if (update.id > this.cache.sequence && !this.stash.get(update.id)) {
+        this.handleRevision(update)
+      }
     } else {
       this.handleDump(update)
     }
@@ -133,14 +140,7 @@ export class Store<T extends { [key: string]: any }> {
   }
 
   private handleRevision(revision: Revision): void {
-    // stash the revision
     this.stash.set(revision.id, { revision, undo: [] })
-
-    // if revision is futuristic, fetch missing revisions
-    if (revision.id > this.cache.sequence + 1) {
-      this.http.getRevisions(this.cache.sequence)
-    }
-
     this.processStashed(revision.id)
   }
 
@@ -204,14 +204,7 @@ export class Store<T extends { [key: string]: any }> {
   }
 
   private updateWatchedNodes(revisionPath: string) {
-    const kill = (path: string) => {
-      this.watchedNodes[path].complete()
-      delete this.watchedNodes[path]
-    }
-
     Object.keys(this.watchedNodes).forEach(path => {
-      if (this.watchedNodes[path].observers.length === 0) return kill(path)
-
       if (path.includes(revisionPath) || revisionPath.includes(path)) {
         this.updateValue(path)
       }
