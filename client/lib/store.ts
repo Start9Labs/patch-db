@@ -1,5 +1,5 @@
 import { DBCache, Dump, Revision, Update } from './types'
-import { BehaviorSubject, Observable, ReplaySubject } from 'rxjs'
+import { BehaviorSubject, Observable } from 'rxjs'
 import { applyOperation, getValueByPointer, Operation } from './json-patch-lib'
 import BTree from 'sorted-btree'
 
@@ -10,7 +10,7 @@ export interface StashEntry {
 
 export class Store<T extends { [key: string]: any }> {
   readonly sequence$ = new BehaviorSubject(this.cache.sequence)
-  private watchedNodes: { [path: string]: ReplaySubject<any> } = {}
+  private watchedNodes: { [path: string]: BehaviorSubject<any> } = {}
   private stash = new BTree<number, StashEntry>()
 
   constructor(public cache: DBCache<T>) {}
@@ -91,11 +91,24 @@ export class Store<T extends { [key: string]: any }> {
   >
   watch$(...args: (string | number)[]): Observable<any> {
     const path = `/${args.join('/')}`
-    if (!this.watchedNodes[path]) {
-      this.watchedNodes[path] = new ReplaySubject(1)
+
+    return new Observable(subscriber => {
+      const value = getValueByPointer(this.cache.data, path)
+      const source = this.watchedNodes[path] || new BehaviorSubject(value)
+      const subscription = source.subscribe(subscriber)
+
+      this.watchedNodes[path] = source
       this.updateValue(path)
-    }
-    return this.watchedNodes[path].asObservable()
+
+      return () => {
+        subscription.unsubscribe()
+
+        if (!source.observed) {
+          source.complete()
+          delete this.watchedNodes[path]
+        }
+      }
+    })
   }
 
   update(update: Update<T>): void {
@@ -191,14 +204,7 @@ export class Store<T extends { [key: string]: any }> {
   }
 
   private updateWatchedNodes(revisionPath: string) {
-    const kill = (path: string) => {
-      this.watchedNodes[path].complete()
-      delete this.watchedNodes[path]
-    }
-
     Object.keys(this.watchedNodes).forEach(path => {
-      if (this.watchedNodes[path].observers.length === 0) return kill(path)
-
       if (path.includes(revisionPath) || revisionPath.includes(path)) {
         this.updateValue(path)
       }
