@@ -1,10 +1,10 @@
 use std::io::Error as IOError;
 use std::sync::Arc;
 
+use barrage::Disconnected;
 use json_ptr::JsonPointer;
 use locker::LockError;
 use thiserror::Error;
-use tokio::sync::broadcast::error::TryRecvError;
 
 // note: inserting into an array (before another element) without proper locking can result in unexpected behaviour
 
@@ -34,6 +34,8 @@ pub use {json_patch, json_ptr};
 
 pub use bulk_locks::{LockReceipt, LockTarget, LockTargetId, Verifier};
 
+pub type Subscriber = barrage::Receiver<Arc<Revision>>;
+
 pub mod test_utils {
     use super::*;
     pub use handle::test_utils::*;
@@ -56,13 +58,18 @@ pub enum Error {
     #[error("FD Lock Error: {0}")]
     FDLock(#[from] fd_lock_rs::Error),
     #[error("Database Cache Corrupted: {0}")]
-    CacheCorrupted(Arc<IOError>),
-    #[error("Subscriber Error: {0}")]
-    Subscriber(#[from] TryRecvError),
+    CacheCorrupted(Arc<Error>),
+    #[error("Subscriber Error: {0:?}")]
+    Subscriber(Disconnected),
     #[error("Node Does Not Exist: {0}")]
     NodeDoesNotExist(JsonPointer),
     #[error("Invalid Lock Request: {0}")]
     LockError(#[from] LockError),
     #[error("Invalid Lock Request: {0}")]
     Locker(String),
+}
+impl From<Disconnected> for Error {
+    fn from(e: Disconnected) -> Self {
+        Error::Subscriber(e)
+    }
 }

@@ -2,10 +2,10 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use barrage::Receiver;
 use json_ptr::{JsonPointer, SegList};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tokio::sync::broadcast::Receiver;
 use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::{
@@ -19,6 +19,7 @@ use crate::{Error, Locker, PatchDb, Revision, Store, Transaction};
 pub struct HandleId {
     pub(crate) id: u64,
     #[cfg(feature = "trace")]
+    #[allow(dead_code)]
     pub(crate) trace: Option<Arc<tracing_error::SpanTrace>>,
 }
 impl PartialEq for HandleId {
@@ -45,7 +46,7 @@ pub trait DbHandle: Send + Sync + Sized {
         locks: impl IntoIterator<Item = bulk_locks::LockTargetId> + Send + Sync + Clone + 'a,
     ) -> Result<bulk_locks::Verifier, Error>;
     fn id(&self) -> HandleId;
-    fn rebase(&mut self) -> Result<(), Error>;
+    fn rebase(&mut self);
     fn store(&self) -> Arc<RwLock<Store>>;
     fn subscribe(&self) -> Receiver<Arc<Revision>>;
     fn locker(&self) -> &Locker;
@@ -53,12 +54,12 @@ pub trait DbHandle: Send + Sync + Sized {
         &mut self,
         ptr: &JsonPointer<S, V>,
         store_read_lock: Option<RwLockReadGuard<'_, Store>>,
-    ) -> Result<bool, Error>;
+    ) -> bool;
     async fn keys<S: AsRef<str> + Send + Sync, V: SegList + Send + Sync>(
         &mut self,
         ptr: &JsonPointer<S, V>,
         store_read_lock: Option<RwLockReadGuard<'_, Store>>,
-    ) -> Result<BTreeSet<String>, Error>;
+    ) -> BTreeSet<String>;
     async fn get_value<S: AsRef<str> + Send + Sync, V: SegList + Send + Sync>(
         &mut self,
         ptr: &JsonPointer<S, V>,
@@ -113,7 +114,7 @@ impl<Handle: DbHandle + ?Sized> DbHandle for &mut Handle {
     fn id(&self) -> HandleId {
         (**self).id()
     }
-    fn rebase(&mut self) -> Result<(), Error> {
+    fn rebase(&mut self) {
         (**self).rebase()
     }
     fn store(&self) -> Arc<RwLock<Store>> {
@@ -129,14 +130,14 @@ impl<Handle: DbHandle + ?Sized> DbHandle for &mut Handle {
         &mut self,
         ptr: &JsonPointer<S, V>,
         store_read_lock: Option<RwLockReadGuard<'_, Store>>,
-    ) -> Result<bool, Error> {
+    ) -> bool {
         (*self).exists(ptr, store_read_lock).await
     }
     async fn keys<S: AsRef<str> + Send + Sync, V: SegList + Send + Sync>(
         &mut self,
         ptr: &JsonPointer<S, V>,
         store_read_lock: Option<RwLockReadGuard<'_, Store>>,
-    ) -> Result<BTreeSet<String>, Error> {
+    ) -> BTreeSet<String> {
         (*self).keys(ptr, store_read_lock).await
     }
     async fn get_value<S: AsRef<str> + Send + Sync, V: SegList + Send + Sync>(
@@ -220,9 +221,7 @@ impl DbHandle for PatchDbHandle {
     fn id(&self) -> HandleId {
         self.id.clone()
     }
-    fn rebase(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
+    fn rebase(&mut self) {}
     fn store(&self) -> Arc<RwLock<Store>> {
         self.db.store.clone()
     }
@@ -236,7 +235,7 @@ impl DbHandle for PatchDbHandle {
         &mut self,
         ptr: &JsonPointer<S, V>,
         store_read_lock: Option<RwLockReadGuard<'_, Store>>,
-    ) -> Result<bool, Error> {
+    ) -> bool {
         if let Some(lock) = store_read_lock {
             lock.exists(ptr)
         } else {
@@ -247,7 +246,7 @@ impl DbHandle for PatchDbHandle {
         &mut self,
         ptr: &JsonPointer<S, V>,
         store_read_lock: Option<RwLockReadGuard<'_, Store>>,
-    ) -> Result<BTreeSet<String>, Error> {
+    ) -> BTreeSet<String> {
         if let Some(lock) = store_read_lock {
             lock.keys(ptr)
         } else {
@@ -259,25 +258,25 @@ impl DbHandle for PatchDbHandle {
         ptr: &JsonPointer<S, V>,
         store_read_lock: Option<RwLockReadGuard<'_, Store>>,
     ) -> Result<Value, Error> {
-        if let Some(lock) = store_read_lock {
-            lock.get(ptr)
+        Ok(if let Some(lock) = store_read_lock {
+            lock.get_value(ptr)
         } else {
-            self.db.get(ptr).await
-        }
+            self.db.get_value(ptr).await
+        })
     }
     async fn put_value<S: AsRef<str> + Send + Sync, V: SegList + Send + Sync>(
         &mut self,
         ptr: &JsonPointer<S, V>,
         value: &Value,
     ) -> Result<Option<Arc<Revision>>, Error> {
-        self.db.put(ptr, value, None).await
+        self.db.put(ptr, value).await
     }
     async fn apply(
         &mut self,
         patch: DiffPatch,
         store_write_lock: Option<RwLockWriteGuard<'_, Store>>,
     ) -> Result<Option<Arc<Revision>>, Error> {
-        self.db.apply(patch, None, store_write_lock).await
+        self.db.apply(patch, store_write_lock).await
     }
     async fn lock(&mut self, ptr: JsonGlob, lock_type: LockType) -> Result<(), Error> {
         self.locks
@@ -303,7 +302,7 @@ impl DbHandle for PatchDbHandle {
         ptr: &JsonPointer<S, V>,
         value: &T,
     ) -> Result<Option<Arc<Revision>>, Error> {
-        self.db.put(ptr, value, None).await
+        self.db.put(ptr, value).await
     }
 
     async fn lock_all<'a>(
@@ -337,7 +336,7 @@ pub mod test_utils {
         fn id(&self) -> HandleId {
             unimplemented!()
         }
-        fn rebase(&mut self) -> Result<(), Error> {
+        fn rebase(&mut self) {
             unimplemented!()
         }
         fn store(&self) -> Arc<RwLock<Store>> {
@@ -353,14 +352,14 @@ pub mod test_utils {
             &mut self,
             _ptr: &JsonPointer<S, V>,
             _store_read_lock: Option<RwLockReadGuard<'_, Store>>,
-        ) -> Result<bool, Error> {
+        ) -> bool {
             unimplemented!()
         }
         async fn keys<S: AsRef<str> + Send + Sync, V: SegList + Send + Sync>(
             &mut self,
             _ptr: &JsonPointer<S, V>,
             _store_read_lock: Option<RwLockReadGuard<'_, Store>>,
-        ) -> Result<BTreeSet<String>, Error> {
+        ) -> BTreeSet<String> {
             unimplemented!()
         }
         async fn get_value<S: AsRef<str> + Send + Sync, V: SegList + Send + Sync>(

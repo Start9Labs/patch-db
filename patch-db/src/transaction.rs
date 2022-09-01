@@ -2,11 +2,10 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use barrage::Receiver;
 use json_ptr::{JsonPointer, SegList};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tokio::sync::broadcast::error::TryRecvError;
-use tokio::sync::broadcast::Receiver;
 use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::patch::{DiffPatch, Revision};
@@ -26,28 +25,21 @@ pub struct Transaction<Parent: DbHandle> {
     pub(crate) sub: Receiver<Arc<Revision>>,
 }
 impl Transaction<&mut PatchDbHandle> {
-    pub async fn commit(
-        mut self,
-        expire_id: Option<String>,
-    ) -> Result<Option<Arc<Revision>>, Error> {
-        if (self.updates.0).0.is_empty() && expire_id.is_none() {
+    pub async fn commit(mut self) -> Result<Option<Arc<Revision>>, Error> {
+        if (self.updates.0).0.is_empty() {
             Ok(None)
         } else {
             let store_lock = self.parent.store();
             let store = store_lock.write().await;
-            self.rebase()?;
-            let rev = self
-                .parent
-                .db
-                .apply(self.updates, expire_id, Some(store))
-                .await?;
+            self.rebase();
+            let rev = self.parent.db.apply(self.updates, Some(store)).await?;
             Ok(rev)
         }
     }
     pub async fn abort(mut self) -> Result<DiffPatch, Error> {
         let store_lock = self.parent.store();
         let _store = store_lock.read().await;
-        self.rebase()?;
+        self.rebase();
         Ok(self.updates)
     }
 }
@@ -55,7 +47,7 @@ impl<Parent: DbHandle + Send + Sync> Transaction<Parent> {
     pub async fn save(mut self) -> Result<(), Error> {
         let store_lock = self.parent.store();
         let store = store_lock.write().await;
-        self.rebase()?;
+        self.rebase();
         self.parent.apply(self.updates, Some(store)).await?;
         Ok(())
     }
@@ -65,7 +57,7 @@ impl<Parent: DbHandle + Send + Sync> DbHandle for Transaction<Parent> {
     async fn begin<'a>(&'a mut self) -> Result<Transaction<&'a mut Self>, Error> {
         let store_lock = self.parent.store();
         let store = store_lock.read().await;
-        self.rebase()?;
+        self.rebase();
         let sub = self.parent.subscribe();
         drop(store);
         Ok(Transaction {
@@ -79,16 +71,11 @@ impl<Parent: DbHandle + Send + Sync> DbHandle for Transaction<Parent> {
     fn id(&self) -> HandleId {
         self.id.clone()
     }
-    fn rebase(&mut self) -> Result<(), Error> {
-        self.parent.rebase()?;
-        while let Some(rev) = match self.sub.try_recv() {
-            Ok(a) => Some(a),
-            Err(TryRecvError::Empty) => None,
-            Err(e) => return Err(e.into()),
-        } {
+    fn rebase(&mut self) {
+        self.parent.rebase();
+        while let Some(rev) = self.sub.try_recv().unwrap() {
             self.updates.rebase(&rev.patch);
         }
-        Ok(())
     }
     fn store(&self) -> Arc<RwLock<Store>> {
         self.parent.store()
@@ -103,7 +90,7 @@ impl<Parent: DbHandle + Send + Sync> DbHandle for Transaction<Parent> {
         &mut self,
         ptr: &JsonPointer<S, V>,
         store_read_lock: Option<RwLockReadGuard<'_, Store>>,
-    ) -> Result<bool, Error> {
+    ) -> bool {
         let exists = {
             let store_lock = self.parent.store();
             let store = if let Some(store_read_lock) = store_read_lock {
@@ -111,16 +98,16 @@ impl<Parent: DbHandle + Send + Sync> DbHandle for Transaction<Parent> {
             } else {
                 store_lock.read().await
             };
-            self.rebase()?;
-            self.parent.exists(ptr, Some(store)).await?
+            self.rebase();
+            self.parent.exists(ptr, Some(store)).await
         };
-        Ok(self.updates.for_path(ptr).exists().unwrap_or(exists))
+        self.updates.for_path(ptr).exists().unwrap_or(exists)
     }
     async fn keys<S: AsRef<str> + Send + Sync, V: SegList + Send + Sync>(
         &mut self,
         ptr: &JsonPointer<S, V>,
         store_read_lock: Option<RwLockReadGuard<'_, Store>>,
-    ) -> Result<BTreeSet<String>, Error> {
+    ) -> BTreeSet<String> {
         let keys = {
             let store_lock = self.parent.store();
             let store = if let Some(store_read_lock) = store_read_lock {
@@ -128,10 +115,10 @@ impl<Parent: DbHandle + Send + Sync> DbHandle for Transaction<Parent> {
             } else {
                 store_lock.read().await
             };
-            self.rebase()?;
-            self.parent.keys(ptr, Some(store)).await?
+            self.rebase();
+            self.parent.keys(ptr, Some(store)).await
         };
-        Ok(self.updates.for_path(ptr).keys(keys))
+        self.updates.for_path(ptr).keys(keys)
     }
     async fn get_value<S: AsRef<str> + Send + Sync, V: SegList + Send + Sync>(
         &mut self,
@@ -145,7 +132,7 @@ impl<Parent: DbHandle + Send + Sync> DbHandle for Transaction<Parent> {
             } else {
                 store_lock.read().await
             };
-            self.rebase()?;
+            self.rebase();
             self.parent.get_value(ptr, Some(store)).await?
         };
         let path_updates = self.updates.for_path(ptr);

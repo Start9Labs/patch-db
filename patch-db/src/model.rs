@@ -353,7 +353,7 @@ impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> OptionModel<T> {
             db.lock(self.0.as_ref().clone().into(), LockType::Exist)
                 .await?;
         }
-        Ok(db.exists(self.as_ref(), None).await?)
+        Ok(db.exists(self.as_ref(), None).await)
     }
 
     pub fn map<
@@ -626,7 +626,7 @@ where
             db.lock(self.json_ptr().clone().into(), LockType::Exist)
                 .await?;
         }
-        let set = db.keys(self.json_ptr(), None).await?;
+        let set = db.keys(self.json_ptr(), None).await;
         Ok(set
             .into_iter()
             .map(|s| serde_json::from_value(Value::String(s)))
@@ -635,7 +635,7 @@ where
     pub async fn remove<Db: DbHandle>(&self, db: &mut Db, key: &T::Key) -> Result<(), Error> {
         db.lock(self.as_ref().clone().into(), LockType::Write)
             .await?;
-        if db.exists(self.clone().idx(key).as_ref(), None).await? {
+        if db.exists(self.clone().idx(key).as_ref(), None).await {
             db.apply(
                 DiffPatch(Patch(vec![PatchOperation::Remove(RemoveOperation {
                     path: self.as_ref().clone().join_end(key.as_ref()),
