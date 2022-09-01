@@ -4,11 +4,10 @@ import { Operation } from './json-patch-lib'
 export type Revision = {
   id: number
   patch: Operation<unknown>[]
-  expireId: string | null
 }
 
 // dump/replace the entire store with T
-export type Dump<T> = { id: number; value: T; expireId: string | null }
+export type Dump<T> = { id: number; value: T }
 
 export type Update<T> = Revision | Dump<T>
 

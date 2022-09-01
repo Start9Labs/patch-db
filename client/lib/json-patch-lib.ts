@@ -39,21 +39,8 @@ export function getValueByPointer<T extends Record<string, T>>(
 export function applyOperation<T>(
   doc: DBCache<Record<string, any>>,
   { path, op, value }: Operation<T> & { value?: T },
-): Operation<T> | null {
-  const current = getValueByPointer(doc.data, path)
-  const remove = { op: PatchOp.REMOVE, path } as const
-  const add = { op: PatchOp.ADD, path, value: current } as const
-  const replace = { op: PatchOp.REPLACE, path, value: current } as const
-
+) {
   doc.data = recursiveApply(doc.data, jsonPathToKeyArray(path), op, value)
-
-  switch (op) {
-    case PatchOp.REMOVE:
-      return current === undefined ? null : add
-    case PatchOp.REPLACE:
-    case PatchOp.ADD:
-      return current === undefined ? remove : replace
-  }
 }
 
 function recursiveApply<T extends Record<string, any> | any[]>(
