@@ -107,7 +107,7 @@ where
         binds: &[&str],
     ) -> Result<Option<T>, Error> {
         let path = self.lock.glob.as_pointer(binds);
-        if !db_handle.exists(&path, None).await? {
+        if !db_handle.exists(&path, None).await {
             return Ok(None);
         }
         Ok(Some(db_handle.get(&path).await?))
