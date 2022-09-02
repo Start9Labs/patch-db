@@ -3,6 +3,7 @@ members = [
     "patch-db",
     "patch-db-macro",
     "patch-db-macro-internals",
+    "patch-db-util",
     "cbor",
     "json-patch",
     "json-ptr",
