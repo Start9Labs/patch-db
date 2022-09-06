@@ -148,7 +148,7 @@ export class PatchDB<T extends { [key: string]: any }> {
       } else {
         this.handleDump(update, cache)
       }
-      cache.sequence++
+      cache.sequence = update.id
     })
     this.cache$.next(cache)
   }
