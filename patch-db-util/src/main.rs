@@ -25,7 +25,7 @@ async fn main() {
         Some(("dump", matches)) => {
             let path = matches.value_of("PATH").unwrap();
             let db = patch_db::PatchDb::open(path).await.unwrap();
-            let dump = db.dump().await;
+            let dump = db.dump().await.unwrap();
             serde_json::to_writer_pretty(&mut std::io::stdout(), &dump.value).unwrap();
             println!();
         }
@@ -36,7 +36,6 @@ async fn main() {
             db.put(
                 &JsonPointer::<&str, (&[PtrSegment], &[PtrSegment])>::default(),
                 &value,
-                None,
             )
             .await
             .unwrap();

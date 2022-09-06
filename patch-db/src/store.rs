@@ -96,7 +96,8 @@ impl Store {
                 OpenOptions::new()
                     .create(true)
                     .read(true)
-                    .append(true)
+                    .write(true)
+                    .truncate(false)
                     .open(&path)?,
                 fd_lock_rs::LockType::Exclusive,
                 true,
@@ -199,6 +200,7 @@ impl Store {
         self.file.flush().await?;
         self.file.sync_all().await?;
         tokio::fs::remove_file(&bak).await?;
+        self.file_cursor = self.file.stream_position().await?;
         Ok(())
     }
     pub(crate) async fn apply(&mut self, patch: DiffPatch) -> Result<Option<Arc<Revision>>, Error> {
