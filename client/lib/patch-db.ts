@@ -1,10 +1,19 @@
 import { Bootstrapper, DBCache, Dump, Revision, Update } from './types'
 import { BehaviorSubject, Observable, Subscription, withLatestFrom } from 'rxjs'
-import { applyOperation, getValueByPointer } from './json-patch-lib'
+import {
+  applyOperation,
+  getValueByPointer,
+  jsonPathToKeyArray,
+} from './json-patch-lib'
 
 export class PatchDB<T extends { [key: string]: any }> {
   private sub: Subscription | null = null
-  private watchedNodes: { [path: string]: BehaviorSubject<any> } = {}
+  private watchedNodes: {
+    [path: string]: {
+      subject: BehaviorSubject<any>
+      pathArr: string[]
+    }
+  } = {}
 
   readonly cache$ = new BehaviorSubject({ sequence: 0, data: {} as T })
 
@@ -27,7 +36,7 @@ export class PatchDB<T extends { [key: string]: any }> {
   stop() {
     if (!this.sub) return
 
-    Object.values(this.watchedNodes).forEach(node => node.complete())
+    Object.values(this.watchedNodes).forEach(node => node.subject.complete())
     this.watchedNodes = {}
     this.sub.unsubscribe()
     this.sub = null
@@ -109,15 +118,18 @@ export class PatchDB<T extends { [key: string]: any }> {
     >
   >
   watch$(...args: (string | number)[]): Observable<any> {
-    const path = `/${args.join('/')}`
+    const path = args.length ? `/${args.join('/')}` : ''
 
     if (!this.watchedNodes[path]) {
       const data = this.cache$.value.data
       const value = getValueByPointer(data, path)
-      this.watchedNodes[path] = new BehaviorSubject(value)
+      this.watchedNodes[path] = {
+        subject: new BehaviorSubject(value),
+        pathArr: jsonPathToKeyArray(path),
+      }
     }
 
-    return this.watchedNodes[path]
+    return this.watchedNodes[path].subject
   }
 
   proccessUpdates(updates: Update<T>[], cache: DBCache<T>) {
@@ -157,8 +169,9 @@ export class PatchDB<T extends { [key: string]: any }> {
   }
 
   private updateWatchedNodes(revisionPath: string, data: T): void {
-    Object.keys(this.watchedNodes).forEach(path => {
-      if (path.includes(revisionPath) || revisionPath.includes(path)) {
+    const r = jsonPathToKeyArray(revisionPath)
+    Object.entries(this.watchedNodes).forEach(([path, { pathArr }]) => {
+      if (startsWith(pathArr, r) || startsWith(r, pathArr)) {
         this.updateWatchedNode(path, data)
       }
     })
@@ -166,10 +179,17 @@ export class PatchDB<T extends { [key: string]: any }> {
 
   private updateWatchedNode(path: string, data: T): void {
     const value = getValueByPointer(data, path)
-    this.watchedNodes[path].next(value)
+    this.watchedNodes[path].subject.next(value)
   }
 
   private isRevision(update: Update<T>): update is Revision {
     return 'patch' in update
   }
+}
+
+function startsWith(a: string[], b: string[]) {
+  for (let i = 0; i < b.length; i++) {
+    if (a[i] !== b[i]) return false
+  }
+  return true
 }
