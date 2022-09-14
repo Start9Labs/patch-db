@@ -43,6 +43,10 @@ export function applyOperation<T>(
   doc.data = recursiveApply(doc.data, jsonPathToKeyArray(path), op, value)
 }
 
+export function jsonPathToKeyArray(path: string): string[] {
+  return path.split('/').slice(1)
+}
+
 function recursiveApply<T extends Record<string, any> | any[]>(
   data: T,
   path: readonly string[],
@@ -104,8 +108,4 @@ function recursiveApplyArray<T extends any[]>(
 
 function isObject(val: any): val is Record<string, unknown> {
   return typeof val === 'object' && val !== null && !Array.isArray(val)
-}
-
-function jsonPathToKeyArray(path: string): string[] {
-  return path.split('/').slice(1)
 }
