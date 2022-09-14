@@ -127,6 +127,7 @@ export class PatchDB<T extends { [key: string]: any }> {
         if (update.id < expected) return
         if (update.id > expected) {
           return console.error(
+            // unreachable
             `Received futuristic revision. Expected ${expected}, got ${update.id}`,
           )
         }
@@ -146,19 +147,20 @@ export class PatchDB<T extends { [key: string]: any }> {
     })
     // update watched nodes
     revision.patch.forEach(op => {
-      Object.keys(this.watchedNodes).forEach(watchedPath => {
-        const revisionPath = op.path
-        if (revisionPath.includes(watchedPath)) {
-          this.updateWatchedNode(watchedPath, cache.data)
-        }
-      })
+      this.updateWatchedNodes(op.path, cache.data)
     })
   }
 
   private handleDump(dump: Dump<T>, cache: DBCache<T>): void {
     cache.data = { ...dump.value }
+    this.updateWatchedNodes('', cache.data)
+  }
+
+  private updateWatchedNodes(revisionPath: string, data: T): void {
     Object.keys(this.watchedNodes).forEach(path => {
-      this.updateWatchedNode(path, cache.data)
+      if (path.includes(revisionPath) || revisionPath.includes(path)) {
+        this.updateWatchedNode(path, data)
+      }
     })
   }
 
