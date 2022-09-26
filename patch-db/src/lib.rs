@@ -1,7 +1,6 @@
 use std::io::Error as IOError;
 use std::sync::Arc;
 
-use barrage::Disconnected;
 use json_ptr::JsonPointer;
 use locker::LockError;
 use thiserror::Error;
@@ -15,6 +14,7 @@ mod model;
 mod model_paths;
 mod patch;
 mod store;
+mod subscriber;
 mod transaction;
 
 #[cfg(test)]
@@ -34,7 +34,7 @@ pub use {json_patch, json_ptr};
 
 pub use bulk_locks::{LockReceipt, LockTarget, LockTargetId, Verifier};
 
-pub type Subscriber = barrage::Receiver<Arc<Revision>>;
+pub type Subscriber = tokio::sync::mpsc::UnboundedReceiver<Arc<Revision>>;
 
 pub mod test_utils {
     use super::*;
@@ -60,16 +60,11 @@ pub enum Error {
     #[error("Database Cache Corrupted: {0}")]
     CacheCorrupted(Arc<Error>),
     #[error("Subscriber Error: {0:?}")]
-    Subscriber(Disconnected),
+    Subscriber(#[from] tokio::sync::mpsc::error::TryRecvError),
     #[error("Node Does Not Exist: {0}")]
     NodeDoesNotExist(JsonPointer),
     #[error("Invalid Lock Request: {0}")]
     LockError(#[from] LockError),
     #[error("Invalid Lock Request: {0}")]
     Locker(String),
-}
-impl From<Disconnected> for Error {
-    fn from(e: Disconnected) -> Self {
-        Error::Subscriber(e)
-    }
 }

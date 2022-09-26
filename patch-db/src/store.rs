@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
-use barrage::{Receiver, Sender};
 use fd_lock_rs::FdLock;
 use json_ptr::{JsonPointer, SegList};
 use lazy_static::lazy_static;
@@ -18,7 +17,8 @@ use tokio::sync::{Mutex, OwnedMutexGuard, RwLock, RwLockWriteGuard};
 use crate::handle::HandleId;
 use crate::locker::Locker;
 use crate::patch::{diff, DiffPatch, Dump, Revision};
-use crate::{Error, PatchDbHandle};
+use crate::subscriber::Broadcast;
+use crate::{Error, PatchDbHandle, Subscriber};
 
 lazy_static! {
     static ref OPEN_STORES: Mutex<HashMap<PathBuf, Arc<Mutex<()>>>> = Mutex::new(HashMap::new());
@@ -64,6 +64,7 @@ pub struct Store {
     persistent: Value,
     revision: u64,
     revision_cache: RevisionCache,
+    broadcast: Broadcast<Arc<Revision>>,
 }
 impl Store {
     pub(crate) async fn open<P: AsRef<Path>>(path: P) -> Result<Self, Error> {
@@ -121,6 +122,7 @@ impl Store {
                 persistent,
                 revision,
                 revision_cache: RevisionCache::with_capacity(64),
+                broadcast: Broadcast::new(),
             })
         })
         .await??;
@@ -167,6 +169,9 @@ impl Store {
             id: self.revision,
             value: self.persistent.clone(),
         })
+    }
+    pub(crate) fn subscribe(&mut self) -> Subscriber {
+        self.broadcast.subscribe()
     }
     pub(crate) async fn put<T: Serialize + ?Sized, S: AsRef<str>, V: SegList>(
         &mut self,
@@ -247,6 +252,7 @@ impl Store {
         let id = self.revision;
         let res = Arc::new(Revision { id, patch });
         self.revision_cache.push(res.clone());
+        self.broadcast.send(&res);
 
         Ok(Some(res))
     }
@@ -255,18 +261,14 @@ impl Store {
 #[derive(Clone)]
 pub struct PatchDb {
     pub(crate) store: Arc<RwLock<Store>>,
-    subscriber: Arc<(Sender<Arc<Revision>>, Receiver<Arc<Revision>>)>,
     pub(crate) locker: Arc<Locker>,
     handle_id: Arc<AtomicU64>,
 }
 impl PatchDb {
     pub async fn open<P: AsRef<Path>>(path: P) -> Result<Self, Error> {
-        let subscriber = barrage::unbounded();
-
         Ok(PatchDb {
             store: Arc::new(RwLock::new(Store::open(path).await?)),
             locker: Arc::new(Locker::new()),
-            subscriber: Arc::new(subscriber),
             handle_id: Arc::new(AtomicU64::new(0)),
         })
     }
@@ -281,10 +283,13 @@ impl PatchDb {
     pub async fn dump(&self) -> Result<Dump, Error> {
         self.store.read().await.dump()
     }
-    pub async fn dump_and_sub(&self) -> Result<(Dump, Receiver<Arc<Revision>>), Error> {
-        let store = self.store.read().await;
-        let sub = self.subscriber.1.clone();
+    pub async fn dump_and_sub(&self) -> Result<(Dump, Subscriber), Error> {
+        let mut store = self.store.write().await;
+        let sub = store.broadcast.subscribe();
         Ok((store.dump()?, sub))
+    }
+    pub async fn subscribe(&self) -> Subscriber {
+        self.store.write().await.subscribe()
     }
     pub async fn exists<S: AsRef<str>, V: SegList>(&self, ptr: &JsonPointer<S, V>) -> bool {
         self.store.read().await.exists(ptr)
@@ -311,9 +316,6 @@ impl PatchDb {
     ) -> Result<Option<Arc<Revision>>, Error> {
         let mut store = self.store.write().await;
         let rev = store.put(ptr, value).await?;
-        if let Some(rev) = rev.as_ref() {
-            self.subscriber.0.send(rev.clone()).unwrap_or_default();
-        }
         Ok(rev)
     }
     pub async fn apply(
@@ -327,13 +329,7 @@ impl PatchDb {
             self.store.write().await
         };
         let rev = store.apply(patch).await?;
-        if let Some(rev) = rev.as_ref() {
-            self.subscriber.0.send(rev.clone()).unwrap_or_default(); // ignore errors
-        }
         Ok(rev)
-    }
-    pub fn subscribe(&self) -> Receiver<Arc<Revision>> {
-        self.subscriber.1.clone()
     }
     pub fn handle(&self) -> PatchDbHandle {
         PatchDbHandle {
