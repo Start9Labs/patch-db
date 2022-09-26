@@ -2,7 +2,6 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use barrage::Receiver;
 use json_ptr::{JsonPointer, SegList};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -48,7 +47,6 @@ pub trait DbHandle: Send + Sync + Sized {
     fn id(&self) -> HandleId;
     fn rebase(&mut self);
     fn store(&self) -> Arc<RwLock<Store>>;
-    fn subscribe(&self) -> Receiver<Arc<Revision>>;
     fn locker(&self) -> &Locker;
     async fn exists<S: AsRef<str> + Send + Sync, V: SegList + Send + Sync>(
         &mut self,
@@ -119,9 +117,6 @@ impl<Handle: DbHandle + ?Sized> DbHandle for &mut Handle {
     }
     fn store(&self) -> Arc<RwLock<Store>> {
         (**self).store()
-    }
-    fn subscribe(&self) -> Receiver<Arc<Revision>> {
-        (**self).subscribe()
     }
     fn locker(&self) -> &Locker {
         (**self).locker()
@@ -211,7 +206,7 @@ impl std::fmt::Debug for PatchDbHandle {
 impl DbHandle for PatchDbHandle {
     async fn begin<'a>(&'a mut self) -> Result<Transaction<&'a mut Self>, Error> {
         Ok(Transaction {
-            sub: self.subscribe(),
+            sub: self.db.subscribe().await,
             id: self.id(),
             parent: self,
             locks: Vec::new(),
@@ -224,9 +219,6 @@ impl DbHandle for PatchDbHandle {
     fn rebase(&mut self) {}
     fn store(&self) -> Arc<RwLock<Store>> {
         self.db.store.clone()
-    }
-    fn subscribe(&self) -> Receiver<Arc<Revision>> {
-        self.db.subscribe()
     }
     fn locker(&self) -> &Locker {
         &self.db.locker
@@ -340,9 +332,6 @@ pub mod test_utils {
             unimplemented!()
         }
         fn store(&self) -> Arc<RwLock<Store>> {
-            unimplemented!()
-        }
-        fn subscribe(&self) -> Receiver<Arc<Revision>> {
             unimplemented!()
         }
         fn locker(&self) -> &Locker {

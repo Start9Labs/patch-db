@@ -2,7 +2,6 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use barrage::Receiver;
 use json_ptr::{JsonPointer, SegList};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -15,14 +14,14 @@ use crate::{
     locker::{Guard, LockType, Locker},
 };
 use crate::{handle::HandleId, model_paths::JsonGlob};
-use crate::{DbHandle, Error, PatchDbHandle};
+use crate::{DbHandle, Error, PatchDbHandle, Subscriber};
 
 pub struct Transaction<Parent: DbHandle> {
     pub(crate) id: HandleId,
     pub(crate) parent: Parent,
     pub(crate) locks: Vec<Guard>,
     pub(crate) updates: DiffPatch,
-    pub(crate) sub: Receiver<Arc<Revision>>,
+    pub(crate) sub: Subscriber,
 }
 impl Transaction<&mut PatchDbHandle> {
     pub async fn commit(mut self) -> Result<Option<Arc<Revision>>, Error> {
@@ -56,9 +55,9 @@ impl<Parent: DbHandle + Send + Sync> Transaction<Parent> {
 impl<Parent: DbHandle + Send + Sync> DbHandle for Transaction<Parent> {
     async fn begin<'a>(&'a mut self) -> Result<Transaction<&'a mut Self>, Error> {
         let store_lock = self.parent.store();
-        let store = store_lock.read().await;
+        let mut store = store_lock.write().await;
         self.rebase();
-        let sub = self.parent.subscribe();
+        let sub = store.subscribe();
         drop(store);
         Ok(Transaction {
             id: self.id(),
@@ -73,15 +72,12 @@ impl<Parent: DbHandle + Send + Sync> DbHandle for Transaction<Parent> {
     }
     fn rebase(&mut self) {
         self.parent.rebase();
-        while let Some(rev) = self.sub.try_recv().unwrap() {
+        while let Ok(rev) = self.sub.try_recv() {
             self.updates.rebase(&rev.patch);
         }
     }
     fn store(&self) -> Arc<RwLock<Store>> {
         self.parent.store()
-    }
-    fn subscribe(&self) -> Receiver<Arc<Revision>> {
-        self.parent.subscribe()
     }
     fn locker(&self) -> &Locker {
         self.parent.locker()
