@@ -7,6 +7,6 @@ edition = "2021"
 
 [dependencies]
 clap = "3.2.16"
-patch-db = { path = "../patch-db" }
+patch-db = { path = "../patch-db", features = ["debug"] }
 serde_json = "1.0.85"
 tokio = { version = "1.20.1", features = ["full"] }
