@@ -18,8 +18,8 @@ export enum PatchOp {
 }
 
 export interface Bootstrapper<T> {
-  init(): Promise<DBCache<T>>
-  update(cache: DBCache<T>): Promise<void>
+  init(): DBCache<T>
+  update(cache: DBCache<T>): void
 }
 
 export interface DBCache<T extends Record<string, any>> {
