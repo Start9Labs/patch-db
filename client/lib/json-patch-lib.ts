@@ -25,12 +25,12 @@ export type Operation<T> =
 
 export function getValueByPointer<T extends Record<string, T>>(
   data: T,
-  pointer: string,
+  path: string,
 ): any {
-  if (pointer === '/') return data
+  if (!path) return data
 
   try {
-    return jsonPathToKeyArray(pointer).reduce((acc, next) => acc[next], data)
+    return arrayFromPath(path).reduce((acc, next) => acc[next], data)
   } catch (e) {
     return undefined
   }
@@ -40,11 +40,31 @@ export function applyOperation<T>(
   doc: DBCache<Record<string, any>>,
   { path, op, value }: Operation<T> & { value?: T },
 ) {
-  doc.data = recursiveApply(doc.data, jsonPathToKeyArray(path), op, value)
+  doc.data = recursiveApply(doc.data, arrayFromPath(path), op, value)
 }
 
-export function jsonPathToKeyArray(path: string): string[] {
-  return path.split('/').slice(1)
+export function arrayFromPath(path: string): string[] {
+  return path
+    .split('/')
+    .slice(1)
+    .map(p =>
+      p.replace(new RegExp('~1', 'g'), '/').replace(new RegExp('~0', 'g'), '~'),
+    )
+}
+
+export function pathFromArray(args: Array<string | number>): string {
+  if (!args.length) return ''
+
+  return (
+    '/' +
+    args
+      .map(a =>
+        String(a)
+          .replace(new RegExp('~', 'g'), '~0')
+          .replace(new RegExp('/', 'g'), '~1'),
+      )
+      .join('/')
+  )
 }
 
 function recursiveApply<T extends Record<string, any> | any[]>(
