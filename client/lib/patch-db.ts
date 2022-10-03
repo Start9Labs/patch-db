@@ -31,10 +31,10 @@ export class PatchDB<T extends { [key: string]: any }> {
 
   constructor(private readonly source$: Observable<Update<T>[]>) {}
 
-  async start(bootstrapper: Bootstrapper<T>) {
+  start(bootstrapper: Bootstrapper<T>) {
     if (this.sub) return
 
-    const initialCache = await bootstrapper.init()
+    const initialCache = bootstrapper.init()
     this.cache$.next(initialCache)
 
     this.sub = this.source$
