@@ -48,6 +48,7 @@ export function arrayFromPath(path: string): string[] {
     .split('/')
     .slice(1)
     .map(p =>
+      // order matters, always replace "~1" first
       p.replace(new RegExp('~1', 'g'), '/').replace(new RegExp('~0', 'g'), '~'),
     )
 }
