@@ -60,6 +60,7 @@ export function pathFromArray(args: Array<string | number>): string {
     args
       .map(a =>
         String(a)
+           // do not change order, "~" needs to be replaced first
           .replace(new RegExp('~', 'g'), '~0')
           .replace(new RegExp('/', 'g'), '~1'),
       )
