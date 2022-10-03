@@ -10,8 +10,9 @@ import {
 } from 'rxjs'
 import {
   applyOperation,
+  arrayFromPath,
   getValueByPointer,
-  jsonPathToKeyArray,
+  pathFromArray,
 } from './json-patch-lib'
 
 export class PatchDB<T extends { [key: string]: any }> {
@@ -133,12 +134,12 @@ export class PatchDB<T extends { [key: string]: any }> {
       filter(({ sequence }) => !!sequence),
       take(1),
       switchMap(({ data }) => {
-        const path = args.length ? `/${args.join('/')}` : ''
+        const path = pathFromArray(args)
         if (!this.watchedNodes[path]) {
           const value = getValueByPointer(data, path)
           this.watchedNodes[path] = {
             subject: new BehaviorSubject(value),
-            pathArr: jsonPathToKeyArray(path),
+            pathArr: arrayFromPath(path),
           }
         }
         return this.watchedNodes[path].subject
@@ -183,7 +184,7 @@ export class PatchDB<T extends { [key: string]: any }> {
   }
 
   private updateWatchedNodes(revisionPath: string, data: T): void {
-    const r = jsonPathToKeyArray(revisionPath)
+    const r = arrayFromPath(revisionPath)
     Object.entries(this.watchedNodes).forEach(([path, { pathArr }]) => {
       if (startsWith(pathArr, r) || startsWith(r, pathArr)) {
         this.updateWatchedNode(path, data)
