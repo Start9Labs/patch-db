@@ -173,22 +173,19 @@ export class PatchDB<T extends { [key: string]: any }> {
       applyOperation(cache, op)
     })
     // update watched nodes
-    revision.patch.forEach(op => {
-      this.updateWatchedNodes(op.path, cache.data)
+    Object.entries(this.watchedNodes).forEach(([watchedPath, { pathArr }]) => {
+      const match = revision.patch.find(({ path }) => {
+        const arr = arrayFromPath(path)
+        return startsWith(pathArr, arr) || startsWith(arr, pathArr)
+      })
+      if (match) this.updateWatchedNode(watchedPath, cache.data)
     })
   }
 
   private handleDump(dump: Dump<T>, cache: DBCache<T>): void {
     cache.data = { ...dump.value }
-    this.updateWatchedNodes('', cache.data)
-  }
-
-  private updateWatchedNodes(revisionPath: string, data: T): void {
-    const r = arrayFromPath(revisionPath)
-    Object.entries(this.watchedNodes).forEach(([path, { pathArr }]) => {
-      if (startsWith(pathArr, r) || startsWith(r, pathArr)) {
-        this.updateWatchedNode(path, data)
-      }
+    Object.keys(this.watchedNodes).forEach(watchedPath => {
+      this.updateWatchedNode(watchedPath, cache.data)
     })
   }
 
