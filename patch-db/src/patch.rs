@@ -1,9 +1,9 @@
 use std::ops::Deref;
 
+use imbl_value::Value;
 use json_patch::{AddOperation, Patch, PatchOperation, RemoveOperation, ReplaceOperation};
 use json_ptr::{JsonPointer, SegList};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
