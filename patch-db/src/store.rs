@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use fd_lock_rs::FdLock;
-use imbl_value::Value;
+use imbl_value::{InternedString, Value};
 use json_patch::PatchError;
 use json_ptr::{JsonPointer, SegList};
 use lazy_static::lazy_static;
@@ -159,7 +159,7 @@ impl Store {
     pub(crate) fn keys<S: AsRef<str>, V: SegList>(
         &self,
         ptr: &JsonPointer<S, V>,
-    ) -> BTreeSet<Arc<String>> {
+    ) -> BTreeSet<InternedString> {
         match ptr.get(&self.persistent).unwrap_or(&Value::Null) {
             Value::Object(o) => o.keys().cloned().collect(),
             _ => BTreeSet::new(),
@@ -326,7 +326,7 @@ impl PatchDb {
     pub async fn keys<S: AsRef<str>, V: SegList>(
         &self,
         ptr: &JsonPointer<S, V>,
-    ) -> BTreeSet<Arc<String>> {
+    ) -> BTreeSet<InternedString> {
         self.store.read().await.keys(ptr)
     }
     pub async fn get_value<S: AsRef<str>, V: SegList>(&self, ptr: &JsonPointer<S, V>) -> Value {

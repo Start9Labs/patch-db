@@ -239,23 +239,23 @@ fn impl_fns(children: &[ChildInfo]) -> Fns {
         if optional {
             impl_fns.extend(quote_spanned! { name.span() =>
                 #vis fn #name (&self) -> patch_db::OptionModel<#model_ty> {
-                    <patch_db::OptionModel::<#model_ty> as patch_db::Model>::new((&**self) #accessor .clone())
+                    <patch_db::OptionModel::<#model_ty> as patch_db::Model>::new((**self) #accessor .clone())
                 }
             });
             impl_mut_fns.extend(quote_spanned! { name.span() =>
-                #vis fn #name (&self) -> patch_db::OptionModelMut<'a, #model_mut_ty> {
-                    <patch_db::OptionModelMut::<'a, #model_mut_ty> as patch_db::ModelMut<'a>>::new(&mut (&mut **self) #accessor)
+                #vis fn #name (&'a mut self) -> patch_db::OptionModelMut<'a, #model_mut_ty> {
+                    <patch_db::OptionModelMut::<'a, #model_mut_ty> as patch_db::ModelMut<'a>>::new(&mut (**self) #accessor)
                 }
             });
         } else {
             impl_fns.extend(quote_spanned! { name.span() =>
                 #vis fn #name (&self) -> #model_ty {
-                    <#model_ty as patch_db::Model>::new((&**self) #accessor .clone())
+                    <#model_ty as patch_db::Model>::new((**self) #accessor .clone())
                 }
             });
             impl_mut_fns.extend(quote_spanned! { name.span() =>
-                #vis fn #name (&mut self) -> #model_mut_ty {
-                    <#model_mut_ty as patch_db::ModelMut<'a>>::new(&mut (&mut **self) #accessor)
+                #vis fn #name (&'a mut self) -> #model_mut_ty {
+                    <#model_mut_ty as patch_db::ModelMut<'a>>::new(&mut (**self) #accessor)
                 }
             });
         }
