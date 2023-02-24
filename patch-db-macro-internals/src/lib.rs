@@ -34,8 +34,8 @@ pub fn build_model(item: &DeriveInput) -> TokenStream {
         Data::Enum(enum_ast) => build_model_enum(item, enum_ast, model_name),
         _ => panic!("Models can only be created for Structs and Enums"),
     };
-    if item.attrs.iter().any(|a| a.path.is_ident("macro_debug")) {
-        panic!("{}", res)
+    if let Some(dbg) = item.attrs.iter().find(|a| a.path.is_ident("macro_debug")) {
+        return Error::new_spanned(dbg, format!("{}", res)).to_compile_error();
     } else {
         res
     }
@@ -167,8 +167,14 @@ fn separate_option(ty: &Type) -> (bool, &Type) {
     (false, ty)
 }
 
-fn impl_fns(children: &[ChildInfo]) -> TokenStream {
-    let mut res = TokenStream::new();
+struct Fns {
+    impl_fns: TokenStream,
+    impl_mut_fns: TokenStream,
+}
+
+fn impl_fns(children: &[ChildInfo]) -> Fns {
+    let mut impl_fns = TokenStream::new();
+    let mut impl_mut_fns = TokenStream::new();
     for ChildInfo {
         vis,
         name,
@@ -206,14 +212,24 @@ fn impl_fns(children: &[ChildInfo]) -> TokenStream {
             a => a.clone(),
         };
         let (optional, ty) = separate_option(ty);
-        let model_ty = if *has_model {
-            quote_spanned! { name.span() =>
-                <#ty as patch_db::HasModel<'a>>::Model
-            }
+        let (model_ty, model_mut_ty) = if *has_model {
+            (
+                quote_spanned! { name.span() =>
+                    <#ty as patch_db::HasModel>::Model
+                },
+                quote_spanned! { name.span() =>
+                    <<#ty as patch_db::HasModel>::Model as patch_db::Model>::Mut<'a>
+                },
+            )
         } else {
-            quote_spanned! { name.span() =>
-                patch_db::GenericModel::<'a, #ty>
-            }
+            (
+                quote_spanned! { name.span() =>
+                    patch_db::GenericModel::<#ty>
+                },
+                quote_spanned! { name.span() =>
+                    patch_db::GenericModelMut::<'a, #ty>
+                },
+            )
         };
         let accessor = if let Some(accessor) = accessor {
             quote! { [#accessor] }
@@ -221,20 +237,33 @@ fn impl_fns(children: &[ChildInfo]) -> TokenStream {
             quote! {}
         };
         if optional {
-            res.extend(quote_spanned! { name.span() =>
-                #vis fn #name (&mut self) -> patch_db::OptionModel<'a, #model_ty> {
-                    <patch_db::OptionModel::<'a, #model_ty> as patch_db::Model<'a>>::new(&mut self #accessor)
+            impl_fns.extend(quote_spanned! { name.span() =>
+                #vis fn #name (&self) -> patch_db::OptionModel<#model_ty> {
+                    <patch_db::OptionModel::<#model_ty> as patch_db::Model>::new((&**self) #accessor .clone())
+                }
+            });
+            impl_mut_fns.extend(quote_spanned! { name.span() =>
+                #vis fn #name (&self) -> patch_db::OptionModelMut<'a, #model_mut_ty> {
+                    <patch_db::OptionModelMut::<'a, #model_mut_ty> as patch_db::ModelMut<'a>>::new(&mut (&mut **self) #accessor)
                 }
             });
         } else {
-            res.extend(quote_spanned! { name.span() =>
-                #vis fn #name (&mut self) -> #model_ty {
-                    <#model_ty as patch_db::Model<'a>>::new(&mut self #accessor)
+            impl_fns.extend(quote_spanned! { name.span() =>
+                #vis fn #name (&self) -> #model_ty {
+                    <#model_ty as patch_db::Model>::new((&**self) #accessor .clone())
+                }
+            });
+            impl_mut_fns.extend(quote_spanned! { name.span() =>
+                #vis fn #name (&mut self) -> #model_mut_ty {
+                    <#model_mut_ty as patch_db::ModelMut<'a>>::new(&mut (&mut **self) #accessor)
                 }
             });
         }
     }
-    res
+    Fns {
+        impl_fns,
+        impl_mut_fns,
+    }
 }
 
 fn build_model_struct(
@@ -261,17 +290,47 @@ fn build_model_struct(
     let children = ChildInfo::from_fields(&serde_rename_all, &ast.fields);
     let name = &base.ident;
     let vis = &base.vis;
-    let impl_fns = impl_fns(&children);
+    let Fns {
+        impl_fns,
+        impl_mut_fns,
+    } = impl_fns(&children);
     quote! {
-        impl<'a> patch_db::HasModel<'a> for #name {
-            type Model = #module_name::Model<'a>;
+        impl patch_db::HasModel for #name {
+            type Model = #module_name::Model;
         }
         #vis mod #module_name {
             use super::*;
 
             #[derive(Debug)]
-            pub struct Model<'a>(&'a mut patch_db::Value);
-            impl<'a> patch_db::Model<'a> for Model<'a> {
+            pub struct Model(patch_db::Value);
+            impl patch_db::Model for Model {
+                type T = #name;
+                type Mut<'a> = ModelMut<'a>;
+                fn new(value: patch_db::Value) -> Self {
+                    Self(value)
+                }
+                fn into_inner(self) -> patch_db::Value {
+                    self.0
+                }
+            }
+            impl ::core::ops::Deref for Model {
+                type Target = patch_db::Value;
+                fn deref(&self) -> &Self::Target {
+                    &self.0
+                }
+            }
+            impl ::core::ops::DerefMut for Model {
+                fn deref_mut(&mut self) -> &mut Self::Target {
+                    &mut self.0
+                }
+            }
+            impl Model {
+                #impl_fns
+            }
+
+            #[derive(Debug)]
+            pub struct ModelMut<'a>(&'a mut patch_db::Value);
+            impl<'a> patch_db::ModelMut<'a> for ModelMut<'a> {
                 type T = #name;
                 fn new(value: &'a mut patch_db::Value) -> Self {
                     Self(value)
@@ -280,19 +339,19 @@ fn build_model_struct(
                     self.0
                 }
             }
-            impl<'a> ::core::ops::Deref for Model<'a> {
+            impl<'a> ::core::ops::Deref for ModelMut<'a> {
                 type Target = patch_db::Value;
                 fn deref(&self) -> &Self::Target {
                     &*self.0
                 }
             }
-            impl<'a> ::core::ops::DerefMut for Model<'a> {
+            impl<'a> ::core::ops::DerefMut for ModelMut<'a> {
                 fn deref_mut(&mut self) -> &mut Self::Target {
                     self.0
                 }
             }
-            impl<'a> Model<'a> {
-                #impl_fns
+            impl<'a> ModelMut<'a> {
+                #impl_mut_fns
             }
         }
     }
@@ -348,11 +407,15 @@ fn build_model_enum(base: &DeriveInput, ast: &DataEnum, module_name: Option<Iden
         })
         .collect();
     let mut model_variants = TokenStream::new();
+    let mut mut_model_variants = TokenStream::new();
     let mut decl_model_variants = TokenStream::new();
     let mut into_inner = TokenStream::new();
     let mut deref = TokenStream::new();
     let mut deref_mut = TokenStream::new();
-    let impl_new = if let Some(Lit::Str(tag)) = serde_tag.remove("tag") {
+    let mut mut_into_inner = TokenStream::new();
+    let mut mut_deref = TokenStream::new();
+    let mut mut_deref_mut = TokenStream::new();
+    let (impl_new, impl_new_mut) = if let Some(Lit::Str(tag)) = serde_tag.remove("tag") {
         children.push(ChildInfo {
             vis: Visibility::Public(VisPublic {
                 pub_token: Pub::default(),
@@ -367,62 +430,107 @@ fn build_model_enum(base: &DeriveInput, ast: &DataEnum, module_name: Option<Iden
         });
         if let Some(Lit::Str(content)) = serde_tag.remove("content") {
             let mut tag_variants = TokenStream::new();
+            let mut tag_variants_mut = TokenStream::new();
             for variant in &ast.variants {
                 let variant_name = &variant.ident;
                 let variant_model =
                     Ident::new(&format!("{}Model", variant_name), variant_name.span());
+                let variant_model_mut =
+                    Ident::new(&format!("{}ModelMut", variant_name), variant_name.span());
                 let variant_accessor =
                     get_accessor(&serde_rename_all, &variant.attrs, variant_name);
                 tag_variants.extend(quote_spanned! { variant_name.span() =>
-                    Some(#variant_accessor) => Model::#variant_name(#variant_model(&mut value[#content])),
+                    Some(#variant_accessor) => Model::#variant_name(#variant_model(value[#content].clone())),
+                });
+                tag_variants_mut.extend(quote_spanned! { variant_name.span() =>
+                    Some(#variant_accessor) => ModelMut::#variant_name(#variant_model_mut(&mut value[#content])),
                 });
             }
-            quote! {
-                match value[#tag].as_str() {
-                    #tag_variants
-                    _ => Model::Error(value),
-                }
-            }
+            (
+                quote! {
+                    match value[#tag].as_str() {
+                        #tag_variants
+                        _ => Model::Error(value),
+                    }
+                },
+                quote! {
+                    match value[#tag].as_str() {
+                        #tag_variants_mut
+                        _ => ModelMut::Error(value),
+                    }
+                },
+            )
         } else {
             let mut tag_variants = TokenStream::new();
+            let mut tag_variants_mut = TokenStream::new();
             for variant in &ast.variants {
                 let variant_name = &variant.ident;
                 let variant_model =
                     Ident::new(&format!("{}Model", variant_name), variant_name.span());
+                let variant_model_mut =
+                    Ident::new(&format!("{}ModelMut", variant_name), variant_name.span());
                 let variant_accessor =
                     get_accessor(&serde_rename_all, &variant.attrs, variant_name);
                 tag_variants.extend(quote_spanned! { variant_name.span() =>
                     Some(#variant_accessor) => Model::#variant_name(#variant_model(value)),
                 });
+                tag_variants_mut.extend(quote_spanned! { variant_name.span() =>
+                    Some(#variant_accessor) => ModelMut::#variant_name(#variant_model_mut(value)),
+                });
             }
-            quote! {
-                match value[#tag].as_str() {
-                    #tag_variants
-                    _ => Model::Error(value),
-                }
-            }
+            (
+                quote! {
+                    match value[#tag].as_str() {
+                        #tag_variants
+                        _ => Model::Error(value),
+                    }
+                },
+                quote! {
+                    match value[#tag].as_str() {
+                        #tag_variants_mut
+                        _ => ModelMut::Error(value),
+                    }
+                },
+            )
         }
     } else {
         let mut tag_variants = TokenStream::new();
+        let mut tag_variants_mut = TokenStream::new();
         for variant in &ast.variants {
             let variant_name = &variant.ident;
             let variant_model = Ident::new(&format!("{}Model", variant_name), variant_name.span());
+            let variant_model_mut =
+                Ident::new(&format!("{}ModelMut", variant_name), variant_name.span());
             let variant_accessor = get_accessor(&serde_rename_all, &variant.attrs, variant_name);
             tag_variants.extend(quote_spanned! { variant_name.span() =>
                 if value.as_object().map(|o| o.contains_key(#variant_accessor)).unwrap_or(false) {
-                    Model::#variant_name(#variant_model(value))
+                    Model::#variant_name(#variant_model(value[#variant_accessor].clone()))
+                } else
+            });
+            tag_variants_mut.extend(quote_spanned! { variant_name.span() =>
+                if value.as_object().map(|o| o.contains_key(#variant_accessor)).unwrap_or(false) {
+                    ModelMut::#variant_name(#variant_model_mut(&mut value[#variant_accessor]))
                 } else
             });
         }
-        quote! {
-            #tag_variants {
-                Model::Error(value),
-            }
-        }
+        (
+            quote! {
+                #tag_variants {
+                    Model::Error(value),
+                }
+            },
+            quote! {
+                #tag_variants_mut {
+                    ModelMut::Error(value),
+                }
+            },
+        )
     };
     for variant in &ast.variants {
         let name = &variant.ident;
         let model_name = Ident::new(&format!("{}Model", variant.ident), variant.ident.span());
+        let model_name_mut =
+            Ident::new(&format!("{}ModelMut", variant.ident), variant.ident.span());
         let serde_rename_all = variant
             .attrs
             .iter()
@@ -434,7 +542,10 @@ fn build_model_enum(base: &DeriveInput, ast: &DataEnum, module_name: Option<Iden
                 _ => None,
             });
         model_variants.extend(quote_spanned! { name.span() =>
-            #name(#model_name<'a>),
+            #name(#model_name),
+        });
+        mut_model_variants.extend(quote_spanned! { name.span() =>
+            #name(#model_name_mut<'a>),
         });
         let children: Vec<_> = ChildInfo::from_fields(&serde_rename_all, &variant.fields)
             .into_iter()
@@ -445,82 +556,154 @@ fn build_model_enum(base: &DeriveInput, ast: &DataEnum, module_name: Option<Iden
                 ..c
             })
             .collect();
-        let impl_fns = impl_fns(&children);
+        let Fns {
+            impl_fns,
+            impl_mut_fns,
+        } = impl_fns(&children);
         decl_model_variants.extend(quote_spanned! { name.span() =>
             #[derive(Debug)]
-            pub struct #model_name<'a>(&'a mut patch_db::Value);
-            impl<'a> ::core::ops::Deref for #model_name<'a> {
+            pub struct #model_name(patch_db::Value);
+            impl ::core::ops::Deref for #model_name {
+                type Target = patch_db::Value;
+                fn deref(&self) -> &Self::Target {
+                    &self.0
+                }
+            }
+            impl ::core::ops::DerefMut for #model_name {
+                fn deref_mut(&mut self) -> &mut Self::Target {
+                    &mut self.0
+                }
+            }
+            impl #model_name {
+                #impl_fns
+            }
+
+            #[derive(Debug)]
+            pub struct #model_name_mut<'a>(&'a mut patch_db::Value);
+            impl<'a> ::core::ops::Deref for #model_name_mut<'a> {
                 type Target = patch_db::Value;
                 fn deref(&self) -> &Self::Target {
                     &*self.0
                 }
             }
-            impl<'a> ::core::ops::DerefMut for #model_name<'a> {
+            impl<'a> ::core::ops::DerefMut for #model_name_mut<'a> {
                 fn deref_mut(&mut self) -> &mut Self::Target {
                     self.0
                 }
             }
-            impl<'a> #model_name<'a> {
-                #impl_fns
+            impl<'a> #model_name_mut<'a> {
+                #impl_mut_fns
             }
         });
         into_inner.extend(quote_spanned! { name.span() =>
             Model::#name(a) => a.0,
         });
         deref.extend(quote_spanned! { name.span() =>
-            Model::#name(a) => &*a,
+            Model::#name(a) => &a.0,
         });
         deref_mut.extend(quote_spanned! { name.span() =>
-            Model::#name(a) => &mut *a,
+            Model::#name(a) => &mut a.0,
+        });
+        mut_into_inner.extend(quote_spanned! { name.span() =>
+            ModelMut::#name(a) => a.0,
+        });
+        mut_deref.extend(quote_spanned! { name.span() =>
+            ModelMut::#name(a) => &*a,
+        });
+        mut_deref_mut.extend(quote_spanned! { name.span() =>
+            ModelMut::#name(a) => &mut *a,
         });
     }
     let name = &base.ident;
     let vis = &base.vis;
-    let impl_fns = impl_fns(&children);
+    let Fns {
+        impl_fns,
+        impl_mut_fns,
+    } = impl_fns(&children);
     quote! {
-        impl<'a> patch_db::HasModel<'a> for #name {
-            type Model = #module_name::Model<'a>;
+        impl patch_db::HasModel for #name {
+            type Model = #module_name::Model;
         }
         #vis mod #module_name {
             use super::*;
 
             #[derive(Debug)]
-            pub enum Model<'a> {
+            pub enum Model {
                 #model_variants
-                Error(&'a mut patch_db::Value),
+                Error(patch_db::Value),
             }
-            impl<'a> patch_db::Model<'a> for Model<'a> {
+            impl patch_db::Model for Model {
                 type T = #name;
-                fn new(value: &'a mut patch_db::Value) -> Self {
+                type Mut<'a> = ModelMut<'a>;
+                fn new(value: patch_db::Value) -> Self {
                     #impl_new
                 }
-                fn into_inner(self) -> &'a mut patch_db::Value {
+                fn into_inner(self) -> patch_db::Value {
                     match self {
                         #into_inner
                         Model::Error(a) => a,
                     }
                 }
             }
-            impl<'a> ::core::ops::Deref for Model<'a> {
+            impl ::core::ops::Deref for Model {
                 type Target = patch_db::Value;
                 fn deref(&self) -> &Self::Target {
                     match self {
                         #deref
-                        Model::Error(a) => &*a,
+                        Model::Error(a) => &a,
                     }
                 }
             }
-            impl<'a> ::core::ops::DerefMut for Model<'a> {
+            impl ::core::ops::DerefMut for Model {
                 fn deref_mut(&mut self) -> &mut Self::Target {
                     match self {
                         #deref_mut
-                        Model::Error(a) => a,
+                        Model::Error(a) => &mut a,
                     }
                 }
             }
-            impl<'a> Model<'a> {
+            impl Model {
                 #impl_fns
             }
+
+            #[derive(Debug)]
+            pub enum ModelMut<'a> {
+                #mut_model_variants
+                Error(&'a mut patch_db::Value),
+            }
+            impl<'a> patch_db::ModelMut<'a> for ModelMut<'a> {
+                type T = #name;
+                fn new(value: &'a mut patch_db::Value) -> Self {
+                    #impl_new_mut
+                }
+                fn into_inner(self) -> &'a mut patch_db::Value {
+                    match self {
+                        #mut_into_inner
+                        ModelMut::Error(a) => a,
+                    }
+                }
+            }
+            impl<'a> ::core::ops::Deref for ModelMut<'a> {
+                type Target = patch_db::Value;
+                fn deref(&self) -> &Self::Target {
+                    match self {
+                        #mut_deref
+                        ModelMut::Error(a) => &*a,
+                    }
+                }
+            }
+            impl<'a> ::core::ops::DerefMut for ModelMut<'a> {
+                fn deref_mut(&mut self) -> &mut Self::Target {
+                    match self {
+                        #mut_deref_mut
+                        ModelMut::Error(a) => a,
+                    }
+                }
+            }
+            impl<'a> ModelMut<'a> {
+                #impl_mut_fns
+            }
+
             #decl_model_variants
         }
     }

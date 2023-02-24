@@ -352,27 +352,22 @@ impl PatchDb {
         let rev = store.apply(patch).await?;
         Ok(rev)
     }
-    pub async fn apply_func<F, T, E>(&self, f: F) -> Result<T, E>
+    pub async fn apply_function<F, T, E>(&self, f: F) -> Result<(Value, T), E>
     where
-        F: FnOnce(&mut Value) -> Result<T, E> + UnwindSafe,
+        F: FnOnce(Value) -> Result<(Value, T), E> + UnwindSafe,
         E: From<Error>,
     {
         let mut store = self.store.write().await;
-        let mut old = store.persistent.clone();
-        let (new, res) = std::panic::catch_unwind(move || {
-            let res = f(&mut old);
-            (old, res)
-        })
-        .map_err(|e| {
+        let old = store.persistent.clone();
+        let (new, res) = std::panic::catch_unwind(move || f(old)).map_err(|e| {
             Error::Panick(
                 e.downcast()
                     .map(|a| *a)
                     .unwrap_or_else(|_| "UNKNOWN".to_owned()),
             )
-        })?;
-        let res = res?;
+        })??;
         let diff = diff(&store.persistent, &new);
         store.apply(diff).await?;
-        Ok(res)
+        Ok((new, res))
     }
 }

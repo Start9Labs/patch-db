@@ -16,7 +16,9 @@ mod test;
 
 pub use imbl_value as value;
 pub use imbl_value::Value;
-pub use model::{GenericModel, HasModel, Map, MapModel, Model, OptionModel};
+pub use model::{
+    GenericModel, GenericModelMut, HasModel, Model, ModelMut, OptionModel, OptionModelMut,
+};
 pub use patch::{DiffPatch, Dump, Revision};
 pub use patch_db_macro::HasModel;
 pub use store::{PatchDb, Store};
