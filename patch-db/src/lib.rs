@@ -16,7 +16,7 @@ mod test;
 
 pub use imbl_value as value;
 pub use imbl_value::Value;
-pub use model::{HasModel, Model, ModelExt};
+pub use model::{HasModel, Map, Model, ModelExt};
 pub use patch::{DiffPatch, Dump, Revision};
 pub use patch_db_macro::HasModel;
 pub use store::{PatchDb, Store};
