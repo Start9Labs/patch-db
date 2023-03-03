@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use fd_lock_rs::FdLock;
+use futures::FutureExt;
 use imbl_value::{InternedString, Value};
 use json_patch::PatchError;
 use json_ptr::{JsonPointer, SegList};
@@ -360,7 +361,7 @@ impl PatchDb {
         let mut store = self.store.write().await;
         let old = store.persistent.clone();
         let (new, res) = std::panic::catch_unwind(move || f(old)).map_err(|e| {
-            Error::Panick(
+            Error::Panic(
                 e.downcast()
                     .map(|a| *a)
                     .unwrap_or_else(|_| "UNKNOWN".to_owned()),
@@ -369,5 +370,34 @@ impl PatchDb {
         let diff = diff(&store.persistent, &new);
         store.apply(diff).await?;
         Ok((new, res))
+    }
+    pub async fn run_idempotent<F, Fut, T, E>(&self, f: F) -> Result<(Value, T), E>
+    where
+        F: Fn(Value) -> Fut + Send + Sync + UnwindSafe,
+        for<'a> &'a F: UnwindSafe,
+        Fut: std::future::Future<Output = Result<(Value, T), E>> + UnwindSafe,
+        E: From<Error>,
+    {
+        let store = self.store.read().await;
+        let old = store.persistent.clone();
+        drop(store);
+        loop {
+            let (new, res) = async { f(old.clone()).await }
+                .catch_unwind()
+                .await
+                .map_err(|e| {
+                    Error::Panic(
+                        e.downcast()
+                            .map(|a| *a)
+                            .unwrap_or_else(|_| "UNKNOWN".to_owned()),
+                    )
+                })??;
+            let mut store = self.store.write().await;
+            if &old == &store.persistent {
+                let diff = diff(&store.persistent, &new);
+                store.apply(diff).await?;
+                return Ok((new, res));
+            }
+        }
     }
 }

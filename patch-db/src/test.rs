@@ -1,7 +1,7 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use imbl_value::Value;
+use imbl_value::{json, Value};
 use json_ptr::JsonPointer;
 use patch_db::{HasModel, PatchDb, Revision};
 use proptest::prelude::*;
@@ -15,14 +15,14 @@ async fn init_db(db_name: String) -> PatchDb {
     let db = PatchDb::open(db_name).await.unwrap();
     db.put(
         &JsonPointer::<&'static str>::default(),
-        &Sample {
-            a: "test1".to_string(),
-            b: Child {
-                a: "test2".to_string(),
-                b: 1,
-                c: NewType(None),
+        &json!({
+            "a": "test1",
+            "b": {
+                "a": "test2",
+                "b": 1,
+                "c": null,
             },
-        },
+        }),
     )
     .await
     .unwrap();
@@ -71,19 +71,19 @@ proptest! {
     }
 }
 
-#[derive(Debug, serde::Deserialize, serde::Serialize, HasModel)]
-pub struct Sample {
-    a: String,
-    #[model]
-    b: Child,
-}
+// #[derive(Debug, serde::Deserialize, serde::Serialize, HasModel)]
+// pub struct Sample {
+//     a: String,
+//     #[model]
+//     b: Child,
+// }
 
-#[derive(Debug, serde::Deserialize, serde::Serialize, HasModel)]
-pub struct Child {
-    a: String,
-    b: usize,
-    c: NewType,
-}
+// #[derive(Debug, serde::Deserialize, serde::Serialize, HasModel)]
+// pub struct Child {
+//     a: String,
+//     b: usize,
+//     c: NewType,
+// }
 
-#[derive(Debug, serde::Deserialize, serde::Serialize, HasModel)]
-pub struct NewType(Option<Box<Sample>>);
+// #[derive(Debug, serde::Deserialize, serde::Serialize, HasModel)]
+// pub struct NewType(Option<Box<Sample>>);

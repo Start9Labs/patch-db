@@ -16,10 +16,11 @@ mod test;
 
 pub use imbl_value as value;
 pub use imbl_value::Value;
-pub use model::{HasModel, Map, Model, ModelExt};
+pub use model::{HasModel, Model, ModelExt};
 pub use patch::{DiffPatch, Dump, Revision};
 pub use patch_db_macro::HasModel;
 pub use store::{PatchDb, Store};
+use tokio::sync::TryLockError;
 pub use {json_patch, json_ptr};
 
 pub type Subscriber = tokio::sync::mpsc::UnboundedReceiver<Arc<Revision>>;
@@ -47,5 +48,7 @@ pub enum Error {
     #[error("Node Does Not Exist: {0}")]
     NodeDoesNotExist(JsonPointer),
     #[error("Provided Function Panicked! {0}")]
-    Panick(String),
+    Panic(String),
+    #[error("Would Block")]
+    WouldBlock(#[from] TryLockError),
 }

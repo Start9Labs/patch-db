@@ -1,193 +1,179 @@
-use std::marker::PhantomData;
-use std::ops::{Deref, DerefMut};
+use imbl_value::Value;
 
-use imbl::OrdSet;
-use imbl_value::{InternedString, Value};
-use serde::de::DeserializeOwned;
-use serde::Serialize;
-
-pub trait HasModel {}
-
-/// &mut Model<T> <=> &mut Value
-
-#[repr(transparent)]
-#[derive(Debug)]
-pub struct Model<T> {
-    value: Value,
-    phantom: PhantomData<T>,
+pub trait HasModel: Sized {
+    type Model: Model<Self>;
 }
-impl<T> Clone for Model<T> {
-    fn clone(&self) -> Self {
-        Self {
-            value: self.value.clone(),
-            phantom: PhantomData,
+
+mod sealed {
+    use super::*;
+    pub trait ModelMarker {
+        fn into_value(self) -> Value;
+        fn from_value(value: Value) -> Self;
+        fn as_value<'a>(&'a self) -> &'a Value;
+        fn value_as<'a>(value: &'a Value) -> &'a Self;
+        fn as_value_mut<'a>(&'a mut self) -> &'a mut Value;
+        fn value_as_mut<'a>(value: &'a mut Value) -> &'a mut Self;
+    }
+    impl<T> ModelMarker for T
+    where
+        T: From<Value> + Into<Value> + Sized,
+        for<'a> &'a T: From<&'a Value> + Into<&'a Value>,
+        for<'a> &'a mut T: From<&'a mut Value> + Into<&'a mut Value>,
+    {
+        fn into_value(self) -> Value {
+            self.into()
+        }
+        fn from_value(value: Value) -> Self {
+            value.into()
+        }
+        fn as_value<'a>(&'a self) -> &'a Value {
+            self.into()
+        }
+        fn value_as<'a>(value: &'a Value) -> &'a Self {
+            value.into()
+        }
+        fn as_value_mut<'a>(&'a mut self) -> &'a mut Value {
+            self.into()
+        }
+        fn value_as_mut<'a>(value: &'a mut Value) -> &'a mut Self {
+            value.into()
         }
     }
 }
-impl<T> Deref for Model<T> {
-    type Target = Value;
-    fn deref(&self) -> &Self::Target {
-        &self.value
-    }
+
+pub trait Model<T>: sealed::ModelMarker + Sized {
+    type Model<U>: Model<U>;
 }
-impl<T> DerefMut for Model<T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.value
+pub trait ModelExt<T>: Model<T> {
+    fn into_value(self) -> Value {
+        <Self as sealed::ModelMarker>::into_value(self)
     }
-}
-impl<T> Model<T> {
-    pub fn new(value: Value) -> Self {
-        Self {
-            value,
-            phantom: PhantomData,
-        }
+    fn from_value(value: Value) -> Self {
+        <Self as sealed::ModelMarker>::from_value(value)
     }
-    pub fn into_inner(self) -> Value {
-        self.value
+    fn as_value<'a>(&'a self) -> &'a Value {
+        <Self as sealed::ModelMarker>::as_value(self)
     }
-    pub fn transmute<U>(self, f: impl FnOnce(Value) -> Value) -> Model<U> {
-        Model {
-            value: f(self.value),
-            phantom: PhantomData,
-        }
+    fn value_as<'a>(value: &'a Value) -> &'a Self {
+        <Self as sealed::ModelMarker>::value_as(value)
     }
-    pub fn transmute_mut<'a, U>(
+    fn as_value_mut<'a>(&'a mut self) -> &'a mut Value {
+        <Self as sealed::ModelMarker>::as_value_mut(self)
+    }
+    fn value_as_mut<'a>(value: &'a mut Value) -> &'a mut Self {
+        <Self as sealed::ModelMarker>::value_as_mut(value)
+    }
+    fn transmute<U>(self, f: impl FnOnce(Value) -> Value) -> Self::Model<U> {
+        Self::Model::<U>::from_value(f(<Self as sealed::ModelMarker>::into_value(self)))
+    }
+    fn transmute_ref<'a, U>(
+        &'a self,
+        f: impl for<'b> FnOnce(&'b Value) -> &'b Value,
+    ) -> &'a Self::Model<U> {
+        Self::Model::<U>::value_as(f(<Self as sealed::ModelMarker>::as_value(self)))
+    }
+    fn transmute_mut<'a, U>(
         &'a mut self,
-        f: impl for<'c> FnOnce(&'c mut Value) -> &'c mut Value,
-    ) -> &'a mut Model<U> {
-        unsafe {
-            std::mem::transmute::<&'a mut Value, &'a mut Model<U>>(f(std::mem::transmute::<
-                &'a mut Model<T>,
-                &'a mut Value,
-            >(self)))
-        }
+        f: impl for<'b> FnOnce(&'b mut Value) -> &'b mut Value,
+    ) -> &'a mut Self::Model<U> {
+        Self::Model::<U>::value_as_mut(f(<Self as sealed::ModelMarker>::as_value_mut(self)))
     }
 }
-
-pub trait ModelExt: Deref<Target = Value> + DerefMut {
-    type T: DeserializeOwned + Serialize;
-    fn set(&mut self, value: &Self::T) -> Result<(), imbl_value::Error> {
-        *self.deref_mut() = imbl_value::to_value(value)?;
-        Ok(())
-    }
-    fn get(&self) -> Result<Self::T, imbl_value::Error> {
-        imbl_value::from_value(self.deref().clone())
-    }
-}
-
-impl<T: DeserializeOwned + Serialize> ModelExt for Model<T> {
-    type T = T;
-}
-
-impl<T> Model<Option<T>> {
-    pub fn transpose(self) -> Option<Model<T>> {
-        if self.is_null() {
-            None
-        } else {
-            Some(self.transmute(|a| a))
-        }
-    }
-}
-
-pub trait Map: DeserializeOwned + Serialize {
-    type Key;
-    type Value;
-    type Error: From<imbl_value::Error>;
-}
-
-impl<T: Map> Model<T>
-where
-    T::Key: DeserializeOwned + Ord + Clone,
-{
-    pub fn keys(&self) -> Result<OrdSet<T::Key>, T::Error> {
-        use serde::de::Error;
-        use serde::Deserialize;
-        match &**self {
-            Value::Object(o) => o
-                .keys()
-                .cloned()
-                .map(|k| {
-                    T::Key::deserialize(imbl_value::de::InternedStringDeserializer::from(k))
-                        .map_err(|e| {
-                            imbl_value::Error {
-                                kind: imbl_value::ErrorKind::Deserialization,
-                                source: e,
-                            }
-                            .into()
-                        })
-                })
-                .collect(),
-            v => Err(imbl_value::Error {
-                source: imbl_value::ErrorSource::custom(format!("expected object found {v}")),
-                kind: imbl_value::ErrorKind::Deserialization,
-            }
-            .into()),
-        }
-    }
-}
-impl<T: Map> Model<T>
-where
-    T::Key: AsRef<str>,
-{
-    pub fn idx(self, key: &T::Key) -> Option<Model<T::Value>> {
-        match &*self {
-            Value::Object(o) if o.contains_key(key.as_ref()) => Some(self.transmute(|v| {
-                use imbl_value::index::Index;
-                key.as_ref().index_into_owned(v).unwrap()
-            })),
-            _ => None,
-        }
-    }
-}
-impl<T: Map> Model<T>
-where
-    T::Key: AsRef<str>,
-    T::Value: Serialize,
-{
-    pub fn insert(&mut self, key: &T::Key, value: &T::Value) -> Result<(), T::Error> {
-        use serde::ser::Error;
-        let v = imbl_value::to_value(value)?;
-        match &mut **self {
-            Value::Object(o) => {
-                o.insert(InternedString::intern(key.as_ref()), v);
-                Ok(())
-            }
-            _ => Err(imbl_value::Error {
-                source: imbl_value::ErrorSource::custom(format!("expected object found {v}")),
-                kind: imbl_value::ErrorKind::Serialization,
-            }
-            .into()),
-        }
-    }
-}
+impl<T, M: Model<T>> ModelExt<T> for M {}
 
 #[cfg(test)]
 mod test {
-    use super::*;
-
     use crate as patch_db;
-    use imbl_value::json;
+    use crate::model::sealed::ModelMarker;
+    use imbl_value::{from_value, json, to_value, Value};
+    use serde::{de::DeserializeOwned, Serialize};
+    use std::marker::PhantomData;
+
+    /// &mut Model<T> <=> &mut Value
+    #[repr(transparent)]
+    #[derive(Debug)]
+    pub struct Model<T> {
+        value: Value,
+        phantom: PhantomData<T>,
+    }
+    impl<T: DeserializeOwned> Model<T> {
+        pub fn de(self) -> Result<T, imbl_value::Error> {
+            from_value(self.value)
+        }
+    }
+    impl<T: Serialize> Model<T> {
+        pub fn ser(&mut self, value: &T) -> Result<(), imbl_value::Error> {
+            self.value = to_value(value)?;
+            Ok(())
+        }
+    }
+    impl<T> Clone for Model<T> {
+        fn clone(&self) -> Self {
+            Self {
+                value: self.value.clone(),
+                phantom: PhantomData,
+            }
+        }
+    }
+    impl<T> From<Value> for Model<T> {
+        fn from(value: Value) -> Self {
+            Self {
+                value,
+                phantom: PhantomData,
+            }
+        }
+    }
+    impl<T> From<Model<T>> for Value {
+        fn from(value: Model<T>) -> Self {
+            value.value
+        }
+    }
+    impl<'a, T> From<&'a Value> for &'a Model<T> {
+        fn from(value: &'a Value) -> Self {
+            unsafe { std::mem::transmute(value) }
+        }
+    }
+    impl<'a, T> From<&'a Model<T>> for &'a Value {
+        fn from(value: &'a Model<T>) -> Self {
+            unsafe { std::mem::transmute(value) }
+        }
+    }
+    impl<'a, T> From<&'a mut Value> for &mut Model<T> {
+        fn from(value: &'a mut Value) -> Self {
+            unsafe { std::mem::transmute(value) }
+        }
+    }
+    impl<'a, T> From<&'a mut Model<T>> for &mut Value {
+        fn from(value: &'a mut Model<T>) -> Self {
+            unsafe { std::mem::transmute(value) }
+        }
+    }
+    impl<T> patch_db::Model<T> for Model<T> {
+        type Model<U> = Model<U>;
+    }
 
     #[derive(crate::HasModel)]
+    #[model = "Model<Self>"]
     // #[macro_debug]
     struct Foo {
         a: Bar,
     }
 
     #[derive(crate::HasModel)]
+    #[model = "Model<Self>"]
     struct Bar {
         b: String,
     }
 
     fn mutate_fn(v: &mut Model<Foo>) {
         let mut a = v.as_a_mut();
-        a.as_b_mut().set(&"NotThis".into()).unwrap();
-        a.as_b_mut().set(&"Replaced".into()).unwrap();
+        a.as_b_mut().ser(&"NotThis".into()).unwrap();
+        a.as_b_mut().ser(&"Replaced".into()).unwrap();
     }
 
     #[test]
     fn test() {
-        let mut model = Model::<Foo>::new(imbl_value::json!({
+        let mut model = Model::<Foo>::from(imbl_value::json!({
             "a": {
                 "b": "ReplaceMe"
             }
@@ -195,8 +181,8 @@ mod test {
         mutate_fn(&mut model);
         mutate_fn(&mut model);
         assert_eq!(
-            &*model,
-            &imbl_value::json!({
+            model.as_value(),
+            &json!({
                 "a": {
                     "b": "Replaced"
                 }
