@@ -17,7 +17,7 @@ export enum PatchOp {
   REPLACE = 'replace',
 }
 
-export interface Bootstrapper<T> {
+export interface Bootstrapper<T extends Record<string, any>> {
   init(): DBCache<T>
   update(cache: DBCache<T>): void
 }
