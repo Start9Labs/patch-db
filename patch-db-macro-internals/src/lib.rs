@@ -462,14 +462,14 @@ fn build_model_enum(base: &DeriveInput, ast: &DataEnum) -> TokenStream {
         .attrs
         .iter()
         .filter(|attr| attr.path.is_ident("serde"))
-        .filter_map(|attr| {
+        .filter_map(|attr| -> Option<Punctuated<MetaNameValue, Comma>> {
             attr.parse_args_with(|s: ParseStream| {
                 Punctuated::<MetaNameValue, Comma>::parse_terminated(s)
             })
             .ok()
         })
         .flatten()
-        .filter_map(|nv| {
+        .filter_map(|nv: MetaNameValue| {
             if nv.path.is_ident("tag") {
                 Some(("tag", nv.lit))
             } else if nv.path.is_ident("content") {
@@ -479,6 +479,7 @@ fn build_model_enum(base: &DeriveInput, ast: &DataEnum) -> TokenStream {
             }
         })
         .collect();
+
     let mut model_variants = TokenStream::new();
     let mut ref_model_variants = TokenStream::new();
     let mut mut_model_variants = TokenStream::new();
@@ -563,11 +564,7 @@ fn build_model_enum(base: &DeriveInput, ast: &DataEnum) -> TokenStream {
                 let variant_accessor =
                     get_accessor(&serde_rename_all, &variant.attrs, variant_name);
                 tag_variants.extend(quote_spanned! { variant_name.span() =>
-                    Some(#variant_accessor) => #match_name::#variant_name(self.transmute(|v| {
-                        #[allow(unused_imports)]
-                        use patch_db::value::index::Index;
-                        #variant_accessor.index_into_owned(v).unwrap_or_default()
-                    })),
+                    Some(#variant_accessor) => #match_name::#variant_name(self.transmute(|v| v)),
                 });
                 tag_variants_unmatch.extend(quote_spanned! { variant_name.span() =>
                     #match_name::#variant_name(v) => Self::from_value({
@@ -577,18 +574,10 @@ fn build_model_enum(base: &DeriveInput, ast: &DataEnum) -> TokenStream {
                     }),
                 });
                 tag_variants_ref.extend(quote_spanned! { variant_name.span() =>
-                    Some(#variant_accessor) => #match_name_ref::#variant_name(self.transmute_ref(|v| {
-                        #[allow(unused_imports)]
-                        use patch_db::value::index::Index;
-                        #variant_accessor.index_into(v).unwrap_or(&patch_db::value::NULL)
-                    })),
+                    Some(#variant_accessor) => #match_name_ref::#variant_name(self.transmute_ref(|v| v)),
                 });
                 tag_variants_mut.extend(quote_spanned! { variant_name.span() =>
-                    Some(#variant_accessor) => #match_name_mut::#variant_name(self.transmute_mut(|v| {
-                        #[allow(unused_imports)]
-                        use patch_db::value::index::Index;
-                        #variant_accessor.index_or_insert(v)
-                    })),
+                    Some(#variant_accessor) => #match_name_mut::#variant_name(self.transmute_mut(|v| v)),
                 });
             }
             (
@@ -732,6 +721,7 @@ fn build_model_enum(base: &DeriveInput, ast: &DataEnum) -> TokenStream {
             }
         }
 
+        #[derive(Debug)]
         #vis enum #match_name {
             #model_variants
             Error(patch_db::Value),
@@ -743,6 +733,7 @@ fn build_model_enum(base: &DeriveInput, ast: &DataEnum) -> TokenStream {
             }
         }
 
+        #[derive(Debug)]
         #vis enum #match_name_ref<'a> {
             #ref_model_variants
             Error(&'a patch_db::Value),
@@ -754,6 +745,7 @@ fn build_model_enum(base: &DeriveInput, ast: &DataEnum) -> TokenStream {
             }
         }
 
+        #[derive(Debug)]
         #vis enum #match_name_mut<'a> {
             #mut_model_variants
             Error(&'a mut patch_db::Value),
