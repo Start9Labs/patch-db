@@ -1,28 +1,28 @@
 use std::future::Future;
 use std::sync::Arc;
 
+use imbl_value::{json, Value};
 use json_ptr::JsonPointer;
 use patch_db::{HasModel, PatchDb, Revision};
 use proptest::prelude::*;
-use serde_json::Value;
 use tokio::fs;
 use tokio::runtime::Builder;
 
-use crate::{self as patch_db, DbHandle, LockType};
+use crate::{self as patch_db};
 
 async fn init_db(db_name: String) -> PatchDb {
     cleanup_db(&db_name).await;
     let db = PatchDb::open(db_name).await.unwrap();
     db.put(
         &JsonPointer::<&'static str>::default(),
-        &Sample {
-            a: "test1".to_string(),
-            b: Child {
-                a: "test2".to_string(),
-                b: 1,
-                c: NewType(None),
+        &json!({
+            "a": "test1",
+            "b": {
+                "a": "test2",
+                "b": 1,
+                "c": null,
             },
-        },
+        }),
     )
     .await
     .unwrap();
@@ -45,23 +45,10 @@ async fn basic() {
     let db = init_db("test.db".to_string()).await;
     let ptr: JsonPointer = "/b/b".parse().unwrap();
     let mut get_res: Value = db.get(&ptr).await.unwrap();
-    assert_eq!(get_res, 1);
+    assert_eq!(get_res.as_u64(), Some(1));
     db.put(&ptr, "hello").await.unwrap();
     get_res = db.get(&ptr).await.unwrap();
-    assert_eq!(get_res, "hello");
-    cleanup_db("test.db").await;
-}
-
-#[tokio::test]
-async fn transaction() {
-    let db = init_db("test.db".to_string()).await;
-    let mut handle = db.handle();
-    let mut tx = handle.begin().await.unwrap();
-    let ptr: JsonPointer = "/b/b".parse().unwrap();
-    tx.put(&ptr, &(2 as usize)).await.unwrap();
-    tx.put(&ptr, &(1 as usize)).await.unwrap();
-    let _res = tx.commit().await.unwrap();
-    println!("res = {:?}", _res);
+    assert_eq!(get_res.as_str(), Some("hello"));
     cleanup_db("test.db").await;
 }
 
@@ -84,32 +71,19 @@ proptest! {
     }
 }
 
-#[derive(Debug, serde::Deserialize, serde::Serialize, HasModel)]
-pub struct Sample {
-    a: String,
-    #[model]
-    b: Child,
-}
+// #[derive(Debug, serde::Deserialize, serde::Serialize, HasModel)]
+// pub struct Sample {
+//     a: String,
+//     #[model]
+//     b: Child,
+// }
 
-#[derive(Debug, serde::Deserialize, serde::Serialize, HasModel)]
-pub struct Child {
-    a: String,
-    b: usize,
-    c: NewType,
-}
+// #[derive(Debug, serde::Deserialize, serde::Serialize, HasModel)]
+// pub struct Child {
+//     a: String,
+//     b: usize,
+//     c: NewType,
+// }
 
-#[derive(Debug, serde::Deserialize, serde::Serialize, HasModel)]
-pub struct NewType(Option<Box<Sample>>);
-
-#[tokio::test]
-async fn locks_dropped_from_enforcer_on_tx_save() {
-    let db = init_db("test.db".to_string()).await;
-    let mut handle = db.handle();
-    let mut tx = handle.begin().await.unwrap();
-    let ptr_a: JsonPointer = "/a".parse().unwrap();
-    let ptr_b: JsonPointer = "/b".parse().unwrap();
-    tx.lock(ptr_b.into(), LockType::Write).await.unwrap();
-    tx.save().await.unwrap();
-    handle.lock(ptr_a.into(), LockType::Write).await.unwrap();
-    cleanup_db("test.db").await;
-}
+// #[derive(Debug, serde::Deserialize, serde::Serialize, HasModel)]
+// pub struct NewType(Option<Box<Sample>>);

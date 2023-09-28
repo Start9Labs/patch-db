@@ -1,25 +1,24 @@
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::fs::OpenOptions;
 use std::io::{SeekFrom, Write};
+use std::panic::UnwindSafe;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 use fd_lock_rs::FdLock;
+use futures::FutureExt;
+use imbl_value::{InternedString, Value};
 use json_patch::PatchError;
 use json_ptr::{JsonPointer, SegList};
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use tokio::fs::File;
 use tokio::io::AsyncSeekExt;
-use tokio::sync::{Mutex, OwnedMutexGuard, RwLock, RwLockWriteGuard};
+use tokio::sync::{Mutex, OwnedMutexGuard, RwLock};
 
-use crate::handle::HandleId;
-use crate::locker::Locker;
 use crate::patch::{diff, DiffPatch, Dump, Revision};
 use crate::subscriber::Broadcast;
-use crate::{Error, PatchDbHandle, Subscriber};
+use crate::{Error, Subscriber};
 
 lazy_static! {
     static ref OPEN_STORES: Mutex<HashMap<PathBuf, Arc<Mutex<()>>>> = Mutex::new(HashMap::new());
@@ -119,7 +118,7 @@ impl Store {
                             .append(true)
                             .open(path.with_extension("failed"))?,
                         "{}",
-                        serde_json::to_string(&patch)?,
+                        imbl_value::to_value(&patch).map_err(Error::JSON)?,
                     )?;
                 }
                 revision += 1;
@@ -161,7 +160,7 @@ impl Store {
     pub(crate) fn keys<S: AsRef<str>, V: SegList>(
         &self,
         ptr: &JsonPointer<S, V>,
-    ) -> BTreeSet<String> {
+    ) -> BTreeSet<InternedString> {
         match ptr.get(&self.persistent).unwrap_or(&Value::Null) {
             Value::Object(o) => o.keys().cloned().collect(),
             _ => BTreeSet::new(),
@@ -174,7 +173,7 @@ impl Store {
         &self,
         ptr: &JsonPointer<S, V>,
     ) -> Result<T, Error> {
-        Ok(serde_json::from_value(self.get_value(ptr))?)
+        Ok(imbl_value::from_value(self.get_value(ptr))?)
     }
     pub(crate) fn dump(&self) -> Result<Dump, Error> {
         Ok(Dump {
@@ -185,17 +184,21 @@ impl Store {
     pub(crate) fn subscribe(&mut self) -> Subscriber {
         self.broadcast.subscribe()
     }
+    pub(crate) async fn put_value<S: AsRef<str>, V: SegList>(
+        &mut self,
+        ptr: &JsonPointer<S, V>,
+        value: &Value,
+    ) -> Result<Option<Arc<Revision>>, Error> {
+        let mut patch = diff(ptr.get(&self.persistent).unwrap_or(&Value::Null), value);
+        patch.prepend(ptr);
+        self.apply(patch).await
+    }
     pub(crate) async fn put<T: Serialize + ?Sized, S: AsRef<str>, V: SegList>(
         &mut self,
         ptr: &JsonPointer<S, V>,
         value: &T,
     ) -> Result<Option<Arc<Revision>>, Error> {
-        let mut patch = diff(
-            ptr.get(&self.persistent).unwrap_or(&Value::Null),
-            &serde_json::to_value(value)?,
-        );
-        patch.prepend(ptr);
-        self.apply(patch).await
+        self.put_value(ptr, &imbl_value::to_value(&value)?).await
     }
     pub(crate) async fn compress(&mut self) -> Result<(), Error> {
         use tokio::io::AsyncWriteExt;
@@ -292,15 +295,11 @@ impl Store {
 #[derive(Clone)]
 pub struct PatchDb {
     pub(crate) store: Arc<RwLock<Store>>,
-    pub(crate) locker: Arc<Locker>,
-    handle_id: Arc<AtomicU64>,
 }
 impl PatchDb {
     pub async fn open<P: AsRef<Path>>(path: P) -> Result<Self, Error> {
         Ok(PatchDb {
             store: Arc::new(RwLock::new(Store::open(path).await?)),
-            locker: Arc::new(Locker::new()),
-            handle_id: Arc::new(AtomicU64::new(0)),
         })
     }
     pub async fn sync(&self, sequence: u64) -> Result<Result<Vec<Arc<Revision>>, Dump>, Error> {
@@ -328,7 +327,7 @@ impl PatchDb {
     pub async fn keys<S: AsRef<str>, V: SegList>(
         &self,
         ptr: &JsonPointer<S, V>,
-    ) -> BTreeSet<String> {
+    ) -> BTreeSet<InternedString> {
         self.store.read().await.keys(ptr)
     }
     pub async fn get_value<S: AsRef<str>, V: SegList>(&self, ptr: &JsonPointer<S, V>) -> Value {
@@ -349,30 +348,56 @@ impl PatchDb {
         let rev = store.put(ptr, value).await?;
         Ok(rev)
     }
-    pub async fn apply(
-        &self,
-        patch: DiffPatch,
-        store_write_lock: Option<RwLockWriteGuard<'_, Store>>,
-    ) -> Result<Option<Arc<Revision>>, Error> {
-        let mut store = if let Some(store_write_lock) = store_write_lock {
-            store_write_lock
-        } else {
-            self.store.write().await
-        };
+    pub async fn apply(&self, patch: DiffPatch) -> Result<Option<Arc<Revision>>, Error> {
+        let mut store = self.store.write().await;
         let rev = store.apply(patch).await?;
         Ok(rev)
     }
-    pub fn handle(&self) -> PatchDbHandle {
-        PatchDbHandle {
-            id: HandleId {
-                id: self
-                    .handle_id
-                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst),
-                #[cfg(feature = "trace")]
-                trace: Some(Arc::new(tracing_error::SpanTrace::capture())),
-            },
-            db: self.clone(),
-            locks: Vec::new(),
+    pub async fn apply_function<F, T, E>(&self, f: F) -> Result<(Value, T), E>
+    where
+        F: FnOnce(Value) -> Result<(Value, T), E> + UnwindSafe,
+        E: From<Error>,
+    {
+        let mut store = self.store.write().await;
+        let old = store.persistent.clone();
+        let (new, res) = std::panic::catch_unwind(move || f(old)).map_err(|e| {
+            Error::Panic(
+                e.downcast()
+                    .map(|a| *a)
+                    .unwrap_or_else(|_| "UNKNOWN".to_owned()),
+            )
+        })??;
+        let diff = diff(&store.persistent, &new);
+        store.apply(diff).await?;
+        Ok((new, res))
+    }
+    pub async fn run_idempotent<F, Fut, T, E>(&self, f: F) -> Result<(Value, T), E>
+    where
+        F: Fn(Value) -> Fut + Send + Sync + UnwindSafe,
+        for<'a> &'a F: UnwindSafe,
+        Fut: std::future::Future<Output = Result<(Value, T), E>> + UnwindSafe,
+        E: From<Error>,
+    {
+        let store = self.store.read().await;
+        let old = store.persistent.clone();
+        drop(store);
+        loop {
+            let (new, res) = async { f(old.clone()).await }
+                .catch_unwind()
+                .await
+                .map_err(|e| {
+                    Error::Panic(
+                        e.downcast()
+                            .map(|a| *a)
+                            .unwrap_or_else(|_| "UNKNOWN".to_owned()),
+                    )
+                })??;
+            let mut store = self.store.write().await;
+            if &old == &store.persistent {
+                let diff = diff(&store.persistent, &new);
+                store.apply(diff).await?;
+                return Ok((new, res));
+            }
         }
     }
 }
