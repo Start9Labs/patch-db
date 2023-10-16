@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap};
 use std::fs::OpenOptions;
 use std::io::{SeekFrom, Write};
 use std::panic::UnwindSafe;
@@ -24,38 +24,6 @@ lazy_static! {
     static ref OPEN_STORES: Mutex<HashMap<PathBuf, Arc<Mutex<()>>>> = Mutex::new(HashMap::new());
 }
 
-pub struct RevisionCache {
-    cache: VecDeque<Arc<Revision>>,
-    capacity: usize,
-}
-impl RevisionCache {
-    pub fn with_capacity(capacity: usize) -> Self {
-        RevisionCache {
-            cache: VecDeque::with_capacity(capacity),
-            capacity,
-        }
-    }
-    pub fn push(&mut self, revision: Arc<Revision>) {
-        while self.capacity > 0 && self.cache.len() >= self.capacity {
-            self.cache.pop_front();
-        }
-        self.cache.push_back(revision);
-    }
-    pub fn since(&self, id: u64) -> Option<Vec<Arc<Revision>>> {
-        let start = self.cache.get(0).map(|rev| rev.id)?;
-        if id < start - 1 {
-            return None;
-        }
-        Some(
-            self.cache
-                .iter()
-                .skip((id - start + 1) as usize)
-                .cloned()
-                .collect(),
-        )
-    }
-}
-
 pub struct Store {
     path: PathBuf,
     file: FdLock<File>,
@@ -63,7 +31,6 @@ pub struct Store {
     _lock: OwnedMutexGuard<()>,
     persistent: Value,
     revision: u64,
-    revision_cache: RevisionCache,
     broadcast: Broadcast<Arc<Revision>>,
 }
 impl Store {
@@ -132,19 +99,12 @@ impl Store {
                 _lock,
                 persistent,
                 revision,
-                revision_cache: RevisionCache::with_capacity(64),
                 broadcast: Broadcast::new(),
             })
         })
         .await??;
         res.compress().await?;
         Ok(res)
-    }
-    pub(crate) fn get_revisions_since(&self, id: u64) -> Option<Vec<Arc<Revision>>> {
-        if id >= self.revision {
-            return Some(Vec::new());
-        }
-        self.revision_cache.since(id)
     }
     pub async fn close(mut self) -> Result<(), Error> {
         use tokio::io::AsyncWriteExt;
@@ -175,11 +135,14 @@ impl Store {
     ) -> Result<T, Error> {
         Ok(imbl_value::from_value(self.get_value(ptr))?)
     }
-    pub(crate) fn dump(&self) -> Result<Dump, Error> {
-        Ok(Dump {
+    pub(crate) fn dump(&self) -> Dump {
+        Dump {
             id: self.revision,
             value: self.persistent.clone(),
-        })
+        }
+    }
+    pub(crate) fn sequence(&self) -> u64 {
+        self.revision
     }
     pub(crate) fn subscribe(&mut self) -> Subscriber {
         self.broadcast.subscribe()
@@ -285,7 +248,6 @@ impl Store {
 
         let id = self.revision;
         let res = Arc::new(Revision { id, patch });
-        self.revision_cache.push(res.clone());
         self.broadcast.send(&res);
 
         Ok(Some(res))
@@ -302,21 +264,16 @@ impl PatchDb {
             store: Arc::new(RwLock::new(Store::open(path).await?)),
         })
     }
-    pub async fn sync(&self, sequence: u64) -> Result<Result<Vec<Arc<Revision>>, Dump>, Error> {
-        let store = self.store.read().await;
-        if let Some(revs) = store.get_revisions_since(sequence) {
-            Ok(Ok(revs))
-        } else {
-            Ok(Err(store.dump()?))
-        }
-    }
-    pub async fn dump(&self) -> Result<Dump, Error> {
+    pub async fn dump(&self) -> Dump {
         self.store.read().await.dump()
     }
-    pub async fn dump_and_sub(&self) -> Result<(Dump, Subscriber), Error> {
+    pub async fn sequence(&self) -> u64 {
+        self.store.read().await.sequence()
+    }
+    pub async fn dump_and_sub(&self) -> (Dump, Subscriber) {
         let mut store = self.store.write().await;
         let sub = store.broadcast.subscribe();
-        Ok((store.dump()?, sub))
+        (store.dump(), sub)
     }
     pub async fn subscribe(&self) -> Subscriber {
         self.store.write().await.subscribe()
