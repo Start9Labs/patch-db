@@ -1,16 +1,24 @@
+use std::collections::BTreeSet;
 use std::ops::Deref;
 
 use imbl_value::Value;
 use json_patch::{AddOperation, Patch, PatchOperation, RemoveOperation, ReplaceOperation};
 use json_ptr::{JsonPointer, SegList};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Revision {
     pub id: u64,
     pub patch: DiffPatch,
+}
+impl Revision {
+    pub fn for_path<S: AsRef<str>, V: SegList>(&self, ptr: &JsonPointer<S, V>) -> Revision {
+        Self {
+            id: self.id,
+            patch: self.patch.for_path(ptr),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

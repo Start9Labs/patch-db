@@ -31,7 +31,7 @@ pub struct Store {
     _lock: OwnedMutexGuard<()>,
     persistent: Value,
     revision: u64,
-    broadcast: Broadcast<Arc<Revision>>,
+    broadcast: Broadcast,
 }
 impl Store {
     pub(crate) async fn open<P: AsRef<Path>>(path: P) -> Result<Self, Error> {
@@ -135,17 +135,17 @@ impl Store {
     ) -> Result<T, Error> {
         Ok(imbl_value::from_value(self.get_value(ptr))?)
     }
-    pub(crate) fn dump(&self) -> Dump {
+    pub(crate) fn dump<S: AsRef<str>, V: SegList>(&self, ptr: &JsonPointer<S, V>) -> Dump {
         Dump {
             id: self.revision,
-            value: self.persistent.clone(),
+            value: ptr.get(&self.persistent).cloned().unwrap_or(Value::Null),
         }
     }
     pub(crate) fn sequence(&self) -> u64 {
         self.revision
     }
-    pub(crate) fn subscribe(&mut self) -> Subscriber {
-        self.broadcast.subscribe()
+    pub(crate) fn subscribe(&mut self, ptr: JsonPointer) -> Subscriber {
+        self.broadcast.subscribe(ptr)
     }
     pub(crate) async fn put_value<S: AsRef<str>, V: SegList>(
         &mut self,
@@ -264,19 +264,18 @@ impl PatchDb {
             store: Arc::new(RwLock::new(Store::open(path).await?)),
         })
     }
-    pub async fn dump(&self) -> Dump {
-        self.store.read().await.dump()
+    pub async fn dump<S: AsRef<str>, V: SegList>(&self, ptr: &JsonPointer<S, V>) -> Dump {
+        self.store.read().await.dump(ptr)
     }
     pub async fn sequence(&self) -> u64 {
         self.store.read().await.sequence()
     }
-    pub async fn dump_and_sub(&self) -> (Dump, Subscriber) {
+    pub async fn dump_and_sub(&self, ptr: JsonPointer) -> (Dump, Subscriber) {
         let mut store = self.store.write().await;
-        let sub = store.broadcast.subscribe();
-        (store.dump(), sub)
+        (store.dump(&ptr), store.broadcast.subscribe(ptr))
     }
-    pub async fn subscribe(&self) -> Subscriber {
-        self.store.write().await.subscribe()
+    pub async fn subscribe(&self, ptr: JsonPointer) -> Subscriber {
+        self.store.write().await.subscribe(ptr)
     }
     pub async fn exists<S: AsRef<str>, V: SegList>(&self, ptr: &JsonPointer<S, V>) -> bool {
         self.store.read().await.exists(ptr)

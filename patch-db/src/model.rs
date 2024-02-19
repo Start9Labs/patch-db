@@ -83,11 +83,13 @@ impl<T, M: Model<T>> ModelExt<T> for M {}
 
 #[cfg(test)]
 mod test {
-    use crate as patch_db;
-    use crate::model::sealed::ModelMarker;
-    use imbl_value::{from_value, json, to_value, Value};
-    use serde::{de::DeserializeOwned, Serialize};
     use std::marker::PhantomData;
+
+    use imbl_value::{from_value, json, to_value, Value};
+    use serde::de::DeserializeOwned;
+    use serde::Serialize;
+
+    use crate as patch_db;
 
     /// &mut Model<T> <=> &mut Value
     #[repr(transparent)]
@@ -181,7 +183,7 @@ mod test {
         mutate_fn(&mut model);
         mutate_fn(&mut model);
         assert_eq!(
-            model.as_value(),
+            crate::model::sealed::ModelMarker::as_value(&model),
             &json!({
                 "a": {
                     "b": "Replaced"
