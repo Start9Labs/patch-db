@@ -152,12 +152,6 @@ export class PatchDB<T extends { [key: string]: any }> {
       if (this.isRevision(update)) {
         const expected = cache.sequence + 1
         if (update.id < expected) return
-        if (update.id > expected) {
-          return console.error(
-            // unreachable
-            `Received futuristic revision. Expected ${expected}, got ${update.id}`,
-          )
-        }
         this.handleRevision(update, cache)
       } else {
         this.handleDump(update, cache)
