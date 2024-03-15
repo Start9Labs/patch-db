@@ -1,4 +1,4 @@
-use patch_db::json_ptr::{JsonPointer, PtrSegment};
+use patch_db::json_ptr::{JsonPointer, PtrSegment, ROOT};
 use serde_json::Value;
 
 #[tokio::main]
@@ -23,7 +23,7 @@ async fn main() {
         Some(("dump", matches)) => {
             let path = matches.value_of("PATH").unwrap();
             let db = patch_db::PatchDb::open(path).await.unwrap();
-            let dump = db.dump().await;
+            let dump = db.dump(&ROOT).await;
             serde_json::to_writer_pretty(&mut std::io::stdout(), &dump.value).unwrap();
             println!();
         }
