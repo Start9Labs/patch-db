@@ -18,7 +18,7 @@ pub use imbl_value::Value;
 pub use model::{HasModel, Model, ModelExt};
 pub use patch::{DiffPatch, Dump, Revision};
 pub use patch_db_macro::HasModel;
-pub use store::{PatchDb, Store};
+pub use store::{PatchDb, Store, TypedPatchDb};
 use tokio::sync::TryLockError;
 pub use {imbl_value as value, json_patch, json_ptr};
 

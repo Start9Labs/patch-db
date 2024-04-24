@@ -1,16 +1,18 @@
 use std::collections::{BTreeSet, HashMap};
 use std::fs::OpenOptions;
 use std::io::{SeekFrom, Write};
+use std::marker::PhantomData;
 use std::panic::UnwindSafe;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use fd_lock_rs::FdLock;
-use futures::FutureExt;
+use futures::{Future, FutureExt};
 use imbl_value::{InternedString, Value};
 use json_patch::PatchError;
-use json_ptr::{JsonPointer, SegList};
+use json_ptr::{JsonPointer, SegList, ROOT};
 use lazy_static::lazy_static;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tokio::fs::File;
 use tokio::io::AsyncSeekExt;
@@ -18,7 +20,7 @@ use tokio::sync::{Mutex, OwnedMutexGuard, RwLock};
 
 use crate::patch::{diff, DiffPatch, Dump, Revision};
 use crate::subscriber::Broadcast;
-use crate::{Error, Subscriber};
+use crate::{Error, HasModel, Subscriber};
 
 lazy_static! {
     static ref OPEN_STORES: Mutex<HashMap<PathBuf, Arc<Mutex<()>>>> = Mutex::new(HashMap::new());
@@ -354,6 +356,92 @@ impl PatchDb {
                 store.apply(diff).await?;
                 return Ok((new, res));
             }
+        }
+    }
+}
+
+pub struct TypedPatchDb<T: HasModel, E: From<Error> = Error> {
+    db: PatchDb,
+    _phantom: PhantomData<(T, E)>,
+}
+impl<T: HasModel, E: From<Error>> Clone for TypedPatchDb<T, E> {
+    fn clone(&self) -> Self {
+        Self {
+            db: self.db.clone(),
+            _phantom: PhantomData,
+        }
+    }
+}
+impl<T: HasModel, E: From<Error>> std::ops::Deref for TypedPatchDb<T, E> {
+    type Target = PatchDb;
+    fn deref(&self) -> &Self::Target {
+        &self.db
+    }
+}
+impl<T: HasModel, E: From<Error>> TypedPatchDb<T, E> {
+    pub fn load_unchecked(db: PatchDb) -> Self {
+        Self {
+            db,
+            _phantom: PhantomData,
+        }
+    }
+    pub async fn peek(&self) -> T::Model {
+        use crate::ModelExt;
+        T::Model::from_value(self.db.dump(&ROOT).await.value)
+    }
+    pub async fn mutate<U: UnwindSafe + Send>(
+        &self,
+        f: impl FnOnce(&mut T::Model) -> Result<U, E> + UnwindSafe + Send,
+    ) -> Result<U, E> {
+        use crate::ModelExt;
+        Ok(self
+            .apply_function(|mut v| {
+                let model = T::Model::value_as_mut(&mut v);
+                let res = f(model)?;
+                Ok::<_, E>((v, res))
+            })
+            .await?
+            .1)
+    }
+    pub async fn map_mutate(
+        &self,
+        f: impl FnOnce(T::Model) -> Result<T::Model, E> + UnwindSafe + Send,
+    ) -> Result<T::Model, E> {
+        use crate::ModelExt;
+        Ok(T::Model::from_value(
+            self.apply_function(|v| {
+                f(T::Model::from_value(v)).map(|a| (T::Model::into_value(a), ()))
+            })
+            .await?
+            .0,
+        ))
+    }
+}
+
+impl<T: HasModel + DeserializeOwned + Serialize, E: From<Error>> TypedPatchDb<T, E> {
+    pub async fn load(db: PatchDb) -> Result<Self, E> {
+        use crate::ModelExt;
+        let res = Self::load_unchecked(db);
+        res.map_mutate(|db| {
+            Ok(T::Model::from_value(
+                imbl_value::to_value(
+                    &imbl_value::from_value::<T>(db.into_value()).map_err(Error::from)?,
+                )
+                .map_err(Error::from)?,
+            ))
+        })
+        .await?;
+        Ok(res)
+    }
+    pub async fn load_or_init<F: FnOnce() -> Fut, Fut: Future<Output = Result<T, E>>>(
+        db: PatchDb,
+        init: F,
+    ) -> Result<Self, E> {
+        if db.dump(&ROOT).await.value.is_null() {
+            db.put(&ROOT, &init().await?).await?;
+            Ok(Self::load_unchecked(db))
+        } else {
+            Self::load(db).await
         }
     }
 }
