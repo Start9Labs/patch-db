@@ -24,12 +24,13 @@ export class PatchDB<T extends { [key: string]: any }> {
     }
   } = {}
 
-  readonly cache$ = new BehaviorSubject<Dump<T>>({
-    id: 0,
-    value: {} as T,
-  })
-
-  constructor(private readonly source$: Observable<Update<T>[]>) {}
+  constructor(
+    private readonly source$: Observable<Update<T>[]>,
+    readonly cache$ = new BehaviorSubject<Dump<T>>({
+      id: 0,
+      value: {} as T,
+    }),
+  ) {}
 
   start() {
     if (this.sub) return
