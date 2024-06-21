@@ -26,7 +26,7 @@ export class PatchDB<T extends { [key: string]: any }> {
 
   constructor(
     private readonly source$: Observable<Update<T>[]>,
-    readonly cache$ = new BehaviorSubject<Dump<T>>({
+    private readonly cache$ = new BehaviorSubject<Dump<T>>({
       id: 0,
       value: {} as T,
     }),
