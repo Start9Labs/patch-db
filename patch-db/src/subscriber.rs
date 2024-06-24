@@ -7,7 +7,11 @@ use crate::Revision;
 struct ScopedSender(JsonPointer, mpsc::UnboundedSender<Revision>);
 impl ScopedSender {
     fn send(&self, revision: &Revision) -> Result<(), mpsc::error::SendError<Revision>> {
-        self.1.send(revision.for_path(&self.0))
+        let scoped = revision.for_path(&self.0);
+        if scoped.patch.is_empty() {
+            return Ok(());
+        }
+        self.1.send(scoped)
     }
 }
 
