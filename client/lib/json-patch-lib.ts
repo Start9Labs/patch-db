@@ -1,4 +1,4 @@
-import { DBCache, PatchOp } from './types'
+import { Dump, PatchOp } from './types'
 
 export interface BaseOperation {
   path: string
@@ -37,10 +37,10 @@ export function getValueByPointer<T extends Record<string, T>>(
 }
 
 export function applyOperation<T>(
-  doc: DBCache<Record<string, any>>,
+  doc: Dump<Record<string, any>>,
   { path, op, value }: Operation<T> & { value?: T },
 ) {
-  doc.data = recursiveApply(doc.data, arrayFromPath(path), op, value)
+  doc.value = recursiveApply(doc.value, arrayFromPath(path), op, value)
 }
 
 export function arrayFromPath(path: string): string[] {
@@ -61,7 +61,7 @@ export function pathFromArray(args: Array<string | number>): string {
     args
       .map(a =>
         String(a)
-           // do not change order, "~" needs to be replaced first
+          // do not change order, "~" needs to be replaced first
           .replace(new RegExp('~', 'g'), '~0')
           .replace(new RegExp('/', 'g'), '~1'),
       )

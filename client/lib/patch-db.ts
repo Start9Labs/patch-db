@@ -1,4 +1,4 @@
-import { Bootstrapper, DBCache, Dump, Revision, Update } from './types'
+import { Dump, Revision, Update } from './types'
 import {
   BehaviorSubject,
   filter,
@@ -24,24 +24,21 @@ export class PatchDB<T extends { [key: string]: any }> {
     }
   } = {}
 
-  readonly cache$ = new BehaviorSubject<DBCache<T>>({
-    sequence: 0,
-    data: {} as T,
-  })
+  constructor(
+    private readonly source$: Observable<Update<T>[]>,
+    private readonly cache$ = new BehaviorSubject<Dump<T>>({
+      id: 0,
+      value: {} as T,
+    }),
+  ) {}
 
-  constructor(private readonly source$: Observable<Update<T>[]>) {}
-
-  start(bootstrapper: Bootstrapper<T>) {
+  start() {
     if (this.sub) return
-
-    const initialCache = bootstrapper.init()
-    this.cache$.next(initialCache)
 
     this.sub = this.source$
       .pipe(withLatestFrom(this.cache$))
       .subscribe(([updates, cache]) => {
         this.proccessUpdates(updates, cache)
-        bootstrapper.update(cache)
       })
   }
 
@@ -52,7 +49,7 @@ export class PatchDB<T extends { [key: string]: any }> {
     this.watchedNodes = {}
     this.sub.unsubscribe()
     this.sub = null
-    this.cache$.next({ sequence: 0, data: {} as T })
+    this.cache$.next({ id: 0, value: {} as T })
   }
 
   watch$(): Observable<T>
@@ -131,14 +128,13 @@ export class PatchDB<T extends { [key: string]: any }> {
   >
   watch$(...args: (string | number)[]): Observable<any> {
     return this.cache$.pipe(
-      filter(({ sequence }) => !!sequence),
+      filter(({ id }) => !!id),
       take(1),
-      switchMap(({ data }) => {
+      switchMap(({ value }) => {
         const path = pathFromArray(args)
         if (!this.watchedNodes[path]) {
-          const value = getValueByPointer(data, path)
           this.watchedNodes[path] = {
-            subject: new BehaviorSubject(value),
+            subject: new BehaviorSubject(getValueByPointer(value, path)),
             pathArr: arrayFromPath(path),
           }
         }
@@ -147,21 +143,21 @@ export class PatchDB<T extends { [key: string]: any }> {
     )
   }
 
-  proccessUpdates(updates: Update<T>[], cache: DBCache<T>) {
+  proccessUpdates(updates: Update<T>[], cache: Dump<T>) {
     updates.forEach(update => {
       if (this.isRevision(update)) {
-        const expected = cache.sequence + 1
+        const expected = cache.id + 1
         if (update.id < expected) return
         this.handleRevision(update, cache)
       } else {
         this.handleDump(update, cache)
       }
-      cache.sequence = update.id
+      cache.id = update.id
     })
     this.cache$.next(cache)
   }
 
-  private handleRevision(revision: Revision, cache: DBCache<T>): void {
+  private handleRevision(revision: Revision, cache: Dump<T>): void {
     // apply opperations
     revision.patch.forEach(op => {
       applyOperation(cache, op)
@@ -172,14 +168,14 @@ export class PatchDB<T extends { [key: string]: any }> {
         const arr = arrayFromPath(path)
         return startsWith(pathArr, arr) || startsWith(arr, pathArr)
       })
-      if (match) this.updateWatchedNode(watchedPath, cache.data)
+      if (match) this.updateWatchedNode(watchedPath, cache.value)
     })
   }
 
-  private handleDump(dump: Dump<T>, cache: DBCache<T>): void {
-    cache.data = { ...dump.value }
+  private handleDump(dump: Dump<T>, cache: Dump<T>): void {
+    cache.value = { ...dump.value }
     Object.keys(this.watchedNodes).forEach(watchedPath => {
-      this.updateWatchedNode(watchedPath, cache.data)
+      this.updateWatchedNode(watchedPath, cache.value)
     })
   }
 
