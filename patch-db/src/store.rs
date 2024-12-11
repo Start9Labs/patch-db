@@ -45,11 +45,11 @@ impl Store {
             let mut lock = OPEN_STORES.lock().await;
             (
                 if let Some(open) = lock.get(&path) {
-                    open.clone().lock_owned().await
+                    open.clone().try_lock_owned()?
                 } else {
                     let tex = Arc::new(Mutex::new(()));
                     lock.insert(path.clone(), tex.clone());
-                    tex.lock_owned().await
+                    tex.try_lock_owned()?
                 },
                 path,
             )
@@ -69,7 +69,7 @@ impl Store {
                     .truncate(false)
                     .open(&path)?,
                 fd_lock_rs::LockType::Exclusive,
-                true,
+                false,
             )?;
             let mut stream =
                 serde_cbor::StreamDeserializer::new(serde_cbor::de::IoRead::new(&mut *f));
