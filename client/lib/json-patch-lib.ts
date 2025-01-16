@@ -115,14 +115,17 @@ function recursiveApplyArray<T extends any[]>(
 ): T {
   const index = parseInt(path[0])
 
-  const updated = recursiveApply(data[index], path.slice(1), op, value)
   const result = [...data] as T
-  if (op === PatchOp.ADD) {
-    result.splice(index, 0, updated)
-  } else if (op === PatchOp.REPLACE) {
-    result.splice(index, 1, updated)
+  // add/remove is only handled differently if this is the last segment in the path
+  if (path.length === 1) {
+    if (op === PatchOp.ADD) result.splice(index, 0, value)
+    else if (op === PatchOp.REMOVE) result.splice(index, 1)
   } else {
-    result.splice(index, 1)
+    result.splice(
+      index,
+      1,
+      recursiveApply(data[index], path.slice(1), op, value),
+    )
   }
 
   return result
