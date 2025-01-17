@@ -21,7 +21,7 @@ async-trait = "0.1.42"
 fd-lock-rs = "0.1.3"
 futures = "0.3.8"
 imbl = "2"
-imbl-value = { git = "https://github.com/Start9Labs/imbl-value.git" }
+imbl-value = "0.1.2"
 json-patch = { path = "../json-patch" }
 json-ptr = { path = "../json-ptr" }
 lazy_static = "1.4.0"
