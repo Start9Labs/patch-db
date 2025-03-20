@@ -256,6 +256,55 @@ impl Store {
     }
 }
 
+#[must_use]
+pub struct MutateResult<T, E> {
+    pub result: Result<T, E>,
+    pub revision: Option<Arc<Revision>>,
+}
+impl<T, E> MutateResult<T, E> {
+    pub fn map_result<T0, E0, F: FnOnce(Result<T, E>) -> Result<T0, E0>>(
+        self,
+        f: F,
+    ) -> MutateResult<T0, E0> {
+        MutateResult {
+            result: f(self.result),
+            revision: self.revision,
+        }
+    }
+    pub fn map_ok<T0, F: FnOnce(T) -> T0>(self, f: F) -> MutateResult<T0, E> {
+        MutateResult {
+            result: self.result.map(f),
+            revision: self.revision,
+        }
+    }
+    pub fn map_err<E0, F: FnOnce(E) -> E0>(self, f: F) -> MutateResult<T, E0> {
+        MutateResult {
+            result: self.result.map_err(f),
+            revision: self.revision,
+        }
+    }
+    pub fn and_then<T0, F: FnOnce(T) -> Result<T0, E>>(self, f: F) -> MutateResult<T0, E> {
+        MutateResult {
+            result: self.result.and_then(f),
+            revision: self.revision,
+        }
+    }
+}
+impl<T, E> From<Result<(T, Option<Arc<Revision>>), E>> for MutateResult<T, E> {
+    fn from(value: Result<(T, Option<Arc<Revision>>), E>) -> Self {
+        match value {
+            Ok((result, revision)) => Self {
+                result: Ok(result),
+                revision,
+            },
+            Err(e) => Self {
+                result: Err(e),
+                revision: None,
+            },
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct PatchDb {
     pub(crate) store: Arc<RwLock<Store>>,
@@ -311,23 +360,27 @@ impl PatchDb {
         let rev = store.apply(patch).await?;
         Ok(rev)
     }
-    pub async fn apply_function<F, T, E>(&self, f: F) -> Result<(Value, T), E>
+    pub async fn apply_function<F, T, E>(&self, f: F) -> MutateResult<(Value, T), E>
     where
         F: FnOnce(Value) -> Result<(Value, T), E> + UnwindSafe,
         E: From<Error>,
     {
-        let mut store = self.store.write().await;
-        let old = store.persistent.clone();
-        let (new, res) = std::panic::catch_unwind(move || f(old)).map_err(|e| {
-            Error::Panic(
-                e.downcast()
-                    .map(|a| *a)
-                    .unwrap_or_else(|_| "UNKNOWN".to_owned()),
-            )
-        })??;
-        let diff = diff(&store.persistent, &new);
-        store.apply(diff).await?;
-        Ok((new, res))
+        async {
+            let mut store = self.store.write().await;
+            let old = store.persistent.clone();
+            let (new, res) = std::panic::catch_unwind(move || f(old)).map_err(|e| {
+                Error::Panic(
+                    e.downcast()
+                        .map(|a| *a)
+                        .unwrap_or_else(|_| "UNKNOWN".to_owned()),
+                )
+            })??;
+            let diff = diff(&store.persistent, &new);
+            let rev = store.apply(diff).await?;
+            Ok(((new, res), rev))
+        }
+        .await
+        .into()
     }
     pub async fn run_idempotent<F, Fut, T, E>(&self, f: F) -> Result<(Value, T), E>
     where
@@ -392,29 +445,24 @@ impl<T: HasModel, E: From<Error>> TypedPatchDb<T, E> {
     pub async fn mutate<U: UnwindSafe + Send>(
         &self,
         f: impl FnOnce(&mut T::Model) -> Result<U, E> + UnwindSafe + Send,
-    ) -> Result<U, E> {
+    ) -> MutateResult<U, E> {
         use crate::ModelExt;
-        Ok(self
-            .apply_function(|mut v| {
-                let model = T::Model::value_as_mut(&mut v);
-                let res = f(model)?;
-                Ok::<_, E>((v, res))
-            })
-            .await?
-            .1)
+        self.apply_function(|mut v| {
+            let model = T::Model::value_as_mut(&mut v);
+            let res = f(model)?;
+            Ok::<_, E>((v, res))
+        })
+        .await
+        .map_ok(|(_, v)| v)
     }
     pub async fn map_mutate(
         &self,
         f: impl FnOnce(T::Model) -> Result<T::Model, E> + UnwindSafe + Send,
-    ) -> Result<T::Model, E> {
+    ) -> MutateResult<T::Model, E> {
         use crate::ModelExt;
-        Ok(T::Model::from_value(
-            self.apply_function(|v| {
-                f(T::Model::from_value(v)).map(|a| (T::Model::into_value(a), ()))
-            })
-            .await?
-            .0,
-        ))
+        self.apply_function(|v| f(T::Model::from_value(v)).map(|a| (T::Model::into_value(a), ())))
+            .await
+            .map_ok(|(v, _)| T::Model::from_value(v))
     }
 }
 
@@ -430,7 +478,8 @@ impl<T: HasModel + DeserializeOwned + Serialize, E: From<Error>> TypedPatchDb<T,
                 .map_err(Error::from)?,
             ))
         })
-        .await?;
+        .await
+        .result?;
         Ok(res)
     }
     pub async fn load_or_init<F: FnOnce() -> Fut, Fut: Future<Output = Result<T, E>>>(
