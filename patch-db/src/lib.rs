@@ -15,7 +15,7 @@ mod subscriber;
 mod test;
 
 pub use imbl_value::Value;
-pub use model::{HasModel, Model, ModelExt};
+pub use model::{DestructureMut, HasModel, Model, ModelExt};
 pub use patch::{DiffPatch, Dump, Revision};
 pub use patch_db_macro::HasModel;
 pub use store::{MutateResult, PatchDb, Store, TypedPatchDb};

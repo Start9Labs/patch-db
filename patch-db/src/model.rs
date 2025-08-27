@@ -1,4 +1,4 @@
-use imbl_value::Value;
+use imbl_value::{InternedString, Value};
 
 pub trait HasModel: Sized {
     type Model: Model<Self>;
@@ -78,8 +78,23 @@ pub trait ModelExt<T>: Model<T> {
     ) -> &'a mut Self::Model<U> {
         Self::Model::<U>::value_as_mut(f(<Self as sealed::ModelMarker>::as_value_mut(self)))
     }
+    fn children_mut<'a>(
+        &'a mut self,
+    ) -> impl IntoIterator<Item = (&'a InternedString, &'a mut Value)> + Send + Sync {
+        ModelExt::<T>::as_value_mut(self)
+            .as_object_mut()
+            .into_iter()
+            .flat_map(|o| o.iter_mut().map(|(k, v)| (&*k, v)))
+    }
 }
 impl<T, M: Model<T>> ModelExt<T> for M {}
+
+pub trait DestructureMut {
+    type Destructured<'a>
+    where
+        Self: 'a;
+    fn destructure_mut<'a>(&'a mut self) -> Self::Destructured<'a>;
+}
 
 #[cfg(test)]
 mod test {

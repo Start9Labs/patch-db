@@ -131,14 +131,19 @@ struct Fns {
     impl_fns: TokenStream,
     impl_ref_fns: TokenStream,
     impl_mut_fns: TokenStream,
+    impl_mut_destructure: TokenStream,
 }
 
-fn impl_fns(model_ty: &Type, children: &[ChildInfo]) -> Fns {
+fn impl_fns(model_ty: &Type, children: &[ChildInfo], name: &Ident) -> Fns {
     let mut parts_args = TokenStream::new();
     let mut parts_assignments = TokenStream::new();
     let mut impl_fns = TokenStream::new();
     let mut impl_ref_fns = TokenStream::new();
     let mut impl_mut_fns = TokenStream::new();
+    let mut destructure_members = TokenStream::new();
+    let mut init_destructure_members = TokenStream::new();
+    let mut mkdestructure_members = TokenStream::new();
+    let mut destructure_member_idents = TokenStream::new();
     for ChildInfo {
         vis,
         name,
@@ -210,6 +215,7 @@ fn impl_fns(model_ty: &Type, children: &[ChildInfo]) -> Fns {
         } else {
             quote! { v }
         };
+
         let child_model_ty = replace_self(model_ty.clone(), &ty);
         parts_args.extend(quote_spanned! { name.span() =>
             #name: #child_model_ty,
@@ -235,7 +241,33 @@ fn impl_fns(model_ty: &Type, children: &[ChildInfo]) -> Fns {
                 self.transmute_mut(|v| #accessor_mut)
             }
         });
+        if let Some(accessor) = accessor {
+            destructure_members.extend(quote_spanned! { name.span() =>
+                #vis #name: &'a mut #child_model_ty,
+            });
+            init_destructure_members.extend(quote_spanned! { name.span() =>
+                {
+                    #[allow(unused_imports)]
+                    use patch_db::value::index::Index;
+                    #accessor.index_or_insert(self.as_value_mut())
+                }
+            });
+            mkdestructure_members.extend(quote_spanned! { name.span() =>
+                let #name = <#child_model_ty>::value_as_mut(__patch_db__destructure_map.remove(#accessor).unwrap());
+            });
+            destructure_member_idents.extend(quote_spanned! { name.span() => #name, });
+        }
     }
+
+    let mod_name = Ident::new(&format!("__patch_db__destructure_{name}"), name.span());
+    let explicit_model_ty = replace_self(
+        model_ty.clone(),
+        &Type::Path(TypePath {
+            qself: None,
+            path: name.clone().into(),
+        }),
+    );
+
     Fns {
         from_parts: quote! {
             pub fn from_parts(#parts_args) -> Self {
@@ -249,6 +281,28 @@ fn impl_fns(model_ty: &Type, children: &[ChildInfo]) -> Fns {
         impl_fns,
         impl_ref_fns,
         impl_mut_fns,
+        impl_mut_destructure: quote! {
+            #[allow(non_snake_case)]
+            mod #mod_name {
+                use super::*;
+                pub struct DestructuredMut<'a> {
+                    __patch_db__destructure_phantom: std::marker::PhantomData<&'a ()>,
+                    #destructure_members
+                }
+                impl patch_db::DestructureMut for #explicit_model_ty {
+                    type Destructured<'a> = DestructuredMut<'a>;
+                    fn destructure_mut<'a>(&'a mut self) -> Self::Destructured<'a> {
+                        use patch_db::ModelExt;
+                        let mut __patch_db__destructure_map: std::collections::BTreeMap<_, _> = self.children_mut().into_iter().collect();
+                        #mkdestructure_members
+                        DestructuredMut {
+                            __patch_db__destructure_phantom: std::marker::PhantomData,
+                            #destructure_member_idents
+                        }
+                    }
+                }
+            }
+        },
     }
 }
 
@@ -349,7 +403,8 @@ fn build_model_struct(base: &DeriveInput, ast: &DataStruct) -> TokenStream {
         impl_fns,
         impl_ref_fns,
         impl_mut_fns,
-    } = impl_fns(&model_ty, &children);
+        impl_mut_destructure,
+    } = impl_fns(&model_ty, &children, name);
     quote! {
         impl patch_db::HasModel for #name {
             type Model = #model_ty;
@@ -360,6 +415,7 @@ fn build_model_struct(base: &DeriveInput, ast: &DataStruct) -> TokenStream {
             #impl_ref_fns
             #impl_mut_fns
         }
+        #impl_mut_destructure
     }
 }
 
