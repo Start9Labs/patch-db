@@ -4,8 +4,6 @@ use std::sync::Arc;
 use json_ptr::JsonPointer;
 use thiserror::Error;
 
-// note: inserting into an array (before another element) without proper locking can result in unexpected behaviour
-
 mod model;
 mod patch;
 mod store;
@@ -15,14 +13,13 @@ mod subscriber;
 mod test;
 
 pub use imbl_value::Value;
-pub use model::{DestructureMut, HasModel, Model, ModelExt};
+pub use model::{DestructureMut, HasModel, Model, ModelExt, Pointer};
 pub use patch::{DiffPatch, Dump, Revision};
 pub use patch_db_macro::HasModel;
 pub use store::{MutateResult, PatchDb, Store, TypedPatchDb};
+pub use subscriber::{DbWatch, Subscriber, TypedDbWatch};
 use tokio::sync::TryLockError;
 pub use {imbl_value as value, json_patch, json_ptr};
-
-pub type Subscriber = tokio::sync::mpsc::UnboundedReceiver<Revision>;
 
 #[derive(Error, Debug)]
 pub enum Error {

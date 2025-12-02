@@ -1,4 +1,31 @@
+use std::marker::PhantomData;
+
 use imbl_value::{InternedString, Value};
+use json_ptr::JsonPointer;
+
+pub struct Pointer<T> {
+    ptr: JsonPointer,
+    phantom: PhantomData<T>,
+}
+impl<T> Default for Pointer<T> {
+    fn default() -> Self {
+        Self {
+            ptr: JsonPointer::default(),
+            phantom: PhantomData,
+        }
+    }
+}
+impl<T> Pointer<T> {
+    pub fn unwrap(self) -> JsonPointer {
+        self.ptr
+    }
+}
+impl<T> std::ops::Deref for Pointer<T> {
+    type Target = JsonPointer;
+    fn deref(&self) -> &Self::Target {
+        &self.ptr
+    }
+}
 
 pub trait HasModel: Sized {
     type Model: Model<Self>;

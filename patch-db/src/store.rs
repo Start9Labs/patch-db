@@ -20,7 +20,7 @@ use tokio::sync::{Mutex, OwnedMutexGuard, RwLock};
 
 use crate::patch::{diff, DiffPatch, Dump, Revision};
 use crate::subscriber::Broadcast;
-use crate::{Error, HasModel, Subscriber};
+use crate::{DbWatch, Error, HasModel, Subscriber};
 
 lazy_static! {
     static ref OPEN_STORES: Mutex<HashMap<PathBuf, Arc<Mutex<()>>>> = Mutex::new(HashMap::new());
@@ -324,6 +324,10 @@ impl PatchDb {
     pub async fn dump_and_sub(&self, ptr: JsonPointer) -> (Dump, Subscriber) {
         let mut store = self.store.write().await;
         (store.dump(&ptr), store.broadcast.subscribe(ptr))
+    }
+    pub async fn watch(&self, ptr: JsonPointer) -> DbWatch {
+        let (dump, sub) = self.dump_and_sub(ptr).await;
+        DbWatch::new(dump, sub)
     }
     pub async fn subscribe(&self, ptr: JsonPointer) -> Subscriber {
         self.store.write().await.subscribe(ptr)
