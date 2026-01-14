@@ -81,10 +81,10 @@ impl ChildInfo {
                         .attrs
                         .iter()
                         .filter(|attr| attr.path.is_ident("serde"))
-                        .filter_map(|attr| syn::parse2::<Path>(attr.tokens.clone()).ok())
+                        .filter_map(|attr| attr.parse_args::<Path>().ok())
                         .any(|path| path.is_ident("flatten"))
                     {
-                        continue;
+                        None
                     } else {
                         Some(Lit::Str(get_accessor(
                             serde_rename_all,
