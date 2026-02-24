@@ -1,4 +1,5 @@
 use std::future::Future;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use imbl_value::{json, Value};
@@ -9,6 +10,14 @@ use tokio::fs;
 use tokio::runtime::Builder;
 
 use crate::{self as patch_db};
+
+/// Atomic counter to generate unique file paths across concurrent tests.
+static TEST_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+fn unique_db_path(prefix: &str) -> String {
+    let id = TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("test-{}-{}.db", prefix, id)
+}
 
 async fn init_db(db_name: String) -> PatchDb {
     cleanup_db(&db_name).await;
@@ -31,9 +40,12 @@ async fn init_db(db_name: String) -> PatchDb {
 
 async fn cleanup_db(db_name: &str) {
     fs::remove_file(db_name).await.ok();
+    fs::remove_file(format!("{}.bak", db_name)).await.ok();
+    fs::remove_file(format!("{}.bak.tmp", db_name)).await.ok();
+    fs::remove_file(format!("{}.failed", db_name)).await.ok();
 }
 
-async fn put_string_into_root(db: PatchDb, s: String) -> Arc<Revision> {
+async fn put_string_into_root(db: &PatchDb, s: String) -> Arc<Revision> {
     db.put(&JsonPointer::<&'static str>::default(), &s)
         .await
         .unwrap()
@@ -42,14 +54,16 @@ async fn put_string_into_root(db: PatchDb, s: String) -> Arc<Revision> {
 
 #[tokio::test]
 async fn basic() {
-    let db = init_db("test.db".to_string()).await;
+    let path = unique_db_path("basic");
+    let db = init_db(path.clone()).await;
     let ptr: JsonPointer = "/b/b".parse().unwrap();
     let mut get_res: Value = db.get(&ptr).await.unwrap();
     assert_eq!(get_res.as_u64(), Some(1));
     db.put(&ptr, "hello").await.unwrap();
     get_res = db.get(&ptr).await.unwrap();
     assert_eq!(get_res.as_str(), Some("hello"));
-    cleanup_db("test.db").await;
+    db.close().await.unwrap();
+    cleanup_db(&path).await;
 }
 
 fn run_future<S: Into<String>, Fut: Future<Output = ()>>(name: S, fut: Fut) {
@@ -64,9 +78,11 @@ proptest! {
     #[test]
     fn doesnt_crash(s in "\\PC*") {
         run_future("test-doesnt-crash", async {
-            let db = init_db("test.db".to_string()).await;
-            put_string_into_root(db, s).await;
-            cleanup_db(&"test.db".to_string()).await;
+            let path = unique_db_path("proptest");
+            let db = init_db(path.clone()).await;
+            put_string_into_root(&db, s).await;
+            db.close().await.unwrap();
+            cleanup_db(&path).await;
         });
     }
 }

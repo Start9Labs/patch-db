@@ -151,7 +151,10 @@ impl DiffPatch {
                                 .get_segment(arr_path_idx)
                                 .and_then(|seg| seg.parse::<usize>().ok())
                             {
-                                if idx >= onto_idx {
+                                // @claude fix #4: Was `idx >= onto_idx`, which caused
+                                // `idx - 1` to underflow when both were 0 (panic in
+                                // debug, wraps to usize::MAX in release).
+                                if idx > onto_idx {
                                     let mut new_path = prefix.clone().to_owned();
                                     new_path.push_end_idx(idx - 1);
                                     if let Some(tail) = path.slice(arr_path_idx + 1..) {

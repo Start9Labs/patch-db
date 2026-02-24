@@ -27,8 +27,10 @@ pub enum Error {
     IO(#[from] IOError),
     #[error("JSON (De)Serialization Error: {0}")]
     JSON(#[from] imbl_value::Error),
-    #[error("CBOR (De)Serialization Error: {0}")]
-    CBOR(#[from] serde_cbor::Error),
+    #[error("CBOR Deserialization Error: {0}")]
+    CborDe(#[from] ciborium::de::Error<IOError>),
+    #[error("CBOR Serialization Error: {0}")]
+    CborSer(#[from] ciborium::ser::Error<IOError>),
     #[error("Index Error: {0:?}")]
     Pointer(#[from] json_ptr::IndexError),
     #[error("Patch Error: {0}")]

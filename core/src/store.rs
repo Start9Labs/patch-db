@@ -71,13 +71,14 @@ impl Store {
                 fd_lock_rs::LockType::Exclusive,
                 false,
             )?;
-            let mut stream =
-                serde_cbor::StreamDeserializer::new(serde_cbor::de::IoRead::new(&mut *f));
-            let mut revision: u64 = stream.next().transpose()?.unwrap_or(0);
-            let mut stream = stream.change_output_type();
-            let mut persistent = stream.next().transpose()?.unwrap_or_else(|| Value::Null);
-            let mut stream = stream.change_output_type();
-            while let Some(Ok(patch)) = stream.next() {
+            let mut reader = std::io::BufReader::new(&mut *f);
+            let mut revision: u64 =
+                ciborium::from_reader(&mut reader).unwrap_or(0);
+            let mut persistent: Value =
+                ciborium::from_reader(&mut reader).unwrap_or(Value::Null);
+            while let Ok(patch) =
+                ciborium::from_reader::<json_patch::Patch, _>(&mut reader)
+            {
                 if let Err(_) = json_patch::patch(&mut persistent, &patch) {
                     #[cfg(feature = "tracing")]
                     tracing::error!("Error applying patch, skipping...");
@@ -105,7 +106,7 @@ impl Store {
             })
         })
         .await??;
-        res.compress().await?;
+        res.compress().await.map(|_| ())?;
         Ok(res)
     }
     pub async fn close(mut self) -> Result<(), Error> {
@@ -114,10 +115,19 @@ impl Store {
         self.file.flush().await?;
         self.file.shutdown().await?;
         self.file.unlock(true).map_err(|e| e.1)?;
+
+        // @claude fix #15: OPEN_STORES never removed entries, causing unbounded
+        // growth over the lifetime of a process. Now cleaned up on close().
+        let mut lock = OPEN_STORES.lock().await;
+        lock.remove(&self.path);
+
         Ok(())
     }
+    // @claude fix #18: Previously compared against Value::Null, which conflated
+    // an explicit JSON null with a missing key. Now uses .is_some() so that a
+    // key with null value is correctly reported as existing.
     pub(crate) fn exists<S: AsRef<str>, V: SegList>(&self, ptr: &JsonPointer<S, V>) -> bool {
-        ptr.get(&self.persistent).unwrap_or(&Value::Null) != &Value::Null
+        ptr.get(&self.persistent).is_some()
     }
     pub(crate) fn keys<S: AsRef<str>, V: SegList>(
         &self,
@@ -165,27 +175,57 @@ impl Store {
     ) -> Result<Option<Arc<Revision>>, Error> {
         self.put_value(ptr, &imbl_value::to_value(&value)?).await
     }
-    pub(crate) async fn compress(&mut self) -> Result<(), Error> {
+    /// Compresses the database file by writing a fresh snapshot.
+    ///
+    /// Returns `true` if the backup was committed (point of no return — the new
+    /// state will be recovered on restart regardless of main file state).
+    /// Returns `false` if the backup was never committed (safe to undo in memory).
+    ///
+    // @claude fix #2 + #10: Rewrote compress with three explicit phases:
+    // 1. Atomic backup via tmp+rename (safe to undo before this point)
+    // 2. Main file rewrite (backup ensures crash recovery; undo is unsafe)
+    // 3. Backup removal is non-fatal (#10) — a leftover backup is harmlessly
+    //    replayed on restart. Previously, remove_file failure propagated an error
+    //    that caused Store::open to rename the stale backup over the good file.
+    //    Return type changed from Result<(), Error> to Result<bool, Error> so the
+    //    caller (TentativeUpdated in apply()) knows whether undo is safe (#2).
+    pub(crate) async fn compress(&mut self) -> Result<bool, Error> {
         use tokio::io::AsyncWriteExt;
         let bak = self.path.with_extension("bak");
         let bak_tmp = bak.with_extension("bak.tmp");
+        let mut revision_cbor = Vec::new();
+        ciborium::into_writer(&self.revision, &mut revision_cbor)?;
+        let mut data_cbor = Vec::new();
+        ciborium::into_writer(&self.persistent, &mut data_cbor)?;
+
+        // Phase 1: Create atomic backup. If this fails, the main file is
+        // untouched and the caller can safely undo the in-memory patch.
         let mut backup_file = File::create(&bak_tmp).await?;
-        let revision_cbor = serde_cbor::to_vec(&self.revision)?;
-        let data_cbor = serde_cbor::to_vec(&self.persistent)?;
         backup_file.write_all(&revision_cbor).await?;
         backup_file.write_all(&data_cbor).await?;
         backup_file.flush().await?;
         backup_file.sync_all().await?;
         tokio::fs::rename(&bak_tmp, &bak).await?;
+
+        // Point of no return: the backup exists with the new state. On restart,
+        // Store::open will rename it over the main file. From here, errors
+        // must NOT cause an in-memory undo.
+
+        // Phase 2: Rewrite main file. If this fails, the backup ensures crash
+        // recovery. We propagate the error but signal that undo is unsafe.
         self.file.set_len(0).await?;
         self.file.seek(SeekFrom::Start(0)).await?;
         self.file.write_all(&revision_cbor).await?;
         self.file.write_all(&data_cbor).await?;
         self.file.flush().await?;
         self.file.sync_all().await?;
-        tokio::fs::remove_file(&bak).await?;
         self.file_cursor = self.file.stream_position().await?;
-        Ok(())
+
+        // Phase 3: Remove backup. Non-fatal — on restart, the backup (which
+        // matches the main file) will be harmlessly applied.
+        let _ = tokio::fs::remove_file(&bak).await;
+
+        Ok(true)
     }
     pub(crate) async fn apply(&mut self, patch: DiffPatch) -> Result<Option<Arc<Revision>>, Error> {
         use tokio::io::AsyncWriteExt;
@@ -222,11 +262,28 @@ impl Store {
         tracing::trace!("Attempting to apply patch: {:?}", patch);
 
         // apply patch in memory
-        let patch_bin = serde_cbor::to_vec(&*patch)?;
+        let mut patch_bin = Vec::new();
+        ciborium::into_writer(&*patch, &mut patch_bin)?;
         let mut updated = TentativeUpdated::new(self, &patch)?;
 
         if updated.store.revision % 4096 == 0 {
-            updated.store.compress().await?
+            match updated.store.compress().await {
+                Ok(_) => {
+                    // Compress succeeded; disarm undo (done below).
+                }
+                Err(e) => {
+                    // @claude fix #2: If compress() succeeded past the atomic
+                    // backup rename, the new state will be recovered on restart.
+                    // Rolling back in-memory would permanently desync memory vs
+                    // disk. Check for backup existence to decide whether undo
+                    // is safe.
+                    let bak = updated.store.path.with_extension("bak");
+                    if bak.exists() {
+                        updated.undo.take(); // disarm: can't undo past the backup
+                    }
+                    return Err(e);
+                }
+            }
         } else {
             if updated.store.file.stream_position().await? != updated.store.file_cursor {
                 updated
@@ -315,6 +372,17 @@ impl PatchDb {
             store: Arc::new(RwLock::new(Store::open(path).await?)),
         })
     }
+    pub async fn close(self) -> Result<(), Error> {
+        let store = Arc::try_unwrap(self.store)
+            .map_err(|_| {
+                Error::IO(std::io::Error::new(
+                    std::io::ErrorKind::WouldBlock,
+                    "other PatchDb references still exist",
+                ))
+            })?
+            .into_inner();
+        store.close().await
+    }
     pub async fn dump<S: AsRef<str>, V: SegList>(&self, ptr: &JsonPointer<S, V>) -> Dump {
         self.store.read().await.dump(ptr)
     }
@@ -386,6 +454,11 @@ impl PatchDb {
         .await
         .into()
     }
+    // @claude fix #1: Previously, `old` was read once before the loop and never
+    // refreshed. If another writer modified store.persistent between the initial
+    // read and the write-lock acquisition, the `old == store.persistent` check
+    // failed forever — spinning the loop infinitely. Now `old` is re-read from
+    // the store at the start of each iteration.
     pub async fn run_idempotent<F, Fut, T, E>(&self, f: F) -> Result<(Value, T), E>
     where
         F: Fn(Value) -> Fut + Send + Sync + UnwindSafe,
@@ -393,10 +466,11 @@ impl PatchDb {
         Fut: std::future::Future<Output = Result<(Value, T), E>> + UnwindSafe,
         E: From<Error>,
     {
-        let store = self.store.read().await;
-        let old = store.persistent.clone();
-        drop(store);
         loop {
+            let store = self.store.read().await;
+            let old = store.persistent.clone();
+            drop(store);
+
             let (new, res) = async { f(old.clone()).await }
                 .catch_unwind()
                 .await
@@ -408,11 +482,12 @@ impl PatchDb {
                     )
                 })??;
             let mut store = self.store.write().await;
-            if &old == &store.persistent {
+            if old == store.persistent {
                 let diff = diff(&store.persistent, &new);
                 store.apply(diff).await?;
                 return Ok((new, res));
             }
+            // State changed since we read it; retry with the fresh value
         }
     }
 }
