@@ -634,11 +634,6 @@ impl JsonPointer<String> {
             PtrSegment::Unescaped(1..prefix_len)
         });
     }
-    // @claude fix #3: Previously just inserted the new segment without adjusting
-    // existing segment ranges (unlike push_start which did shift them). All
-    // existing segments' byte ranges became wrong, causing corrupted pointer
-    // lookups or panics. Now shifts ranges forward by prefix_len, matching
-    // push_start behavior.
     pub fn push_start_idx(&mut self, segment: usize) {
         let mut src = format!("/{}", segment);
         let prefix_len = src.len();

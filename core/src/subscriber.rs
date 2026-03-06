@@ -93,10 +93,6 @@ impl DbWatch {
         self.seen = true;
         Ok(self.state.clone())
     }
-    // @claude fix #9: Previously applied only one revision per poll, emitting
-    // intermediate states that may never have been a consistent committed state.
-    // Now drains all queued revisions after the first wake, matching sync()
-    // behavior so the caller always sees a fully caught-up snapshot.
     pub fn poll_changed(&mut self, cx: &mut std::task::Context<'_>) -> Poll<Result<(), Error>> {
         if !self.seen {
             self.seen = true;
