@@ -62,7 +62,7 @@ async fn basic() {
     db.put(&ptr, "hello").await.unwrap();
     get_res = db.get(&ptr).await.unwrap();
     assert_eq!(get_res.as_str(), Some("hello"));
-    db.close().await.unwrap();
+    db.close().await;
     cleanup_db(&path).await;
 }
 
@@ -81,7 +81,7 @@ proptest! {
             let path = unique_db_path("proptest");
             let db = init_db(path.clone()).await;
             put_string_into_root(&db, s).await;
-            db.close().await.unwrap();
+            db.close().await;
             cleanup_db(&path).await;
         });
     }
