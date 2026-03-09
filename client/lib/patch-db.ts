@@ -206,16 +206,6 @@ export class PatchDB<T extends { [key: string]: any }> {
       if (this.isRevision(update)) {
         const expected = cache.id + 1
         if (update.id < expected) return
-        // @claude fix #7: Previously, revision gaps were silently applied. If
-        // revision 4 was missing and 5 arrived (cache at 3), the patch was
-        // applied without revision 4's changes, producing corrupt state with
-        // no indication. Now logs a warning so the issue is visible.
-        if (update.id > expected) {
-          console.warn(
-            `[patch-db] Revision gap detected: expected ${expected}, got ${update.id}. ` +
-              `State may be inconsistent until the next full dump.`,
-          )
-        }
         this.handleRevision(update, cache)
       } else {
         this.handleDump(update, cache)
