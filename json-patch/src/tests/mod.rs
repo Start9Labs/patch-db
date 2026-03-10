@@ -81,3 +81,41 @@ fn revert_tests() {
 fn merge_tests() {
     util::run_specs("specs/merge_tests.json");
 }
+
+#[test]
+fn many_ops_no_stack_overflow() {
+    let mut doc = json!({"items": {}});
+    let ops: Vec<PatchOperation> = (0..10_000)
+        .map(|i| {
+            PatchOperation::Add(AddOperation {
+                path: format!("/items/{i}").parse().unwrap(),
+                value: json!(i),
+            })
+        })
+        .collect();
+    let p = Patch(ops);
+    patch(&mut doc, &p).unwrap();
+    assert_eq!(doc["items"].as_object().unwrap().len(), 10_000);
+}
+
+#[test]
+fn many_ops_undo_on_failure() {
+    let original = json!({"items": {}});
+    let mut doc = original.clone();
+    let mut ops: Vec<PatchOperation> = (0..1000)
+        .map(|i| {
+            PatchOperation::Add(AddOperation {
+                path: format!("/items/{i}").parse().unwrap(),
+                value: json!(i),
+            })
+        })
+        .collect();
+    // Final op fails: test against a wrong value at a valid path
+    ops.push(PatchOperation::Test(TestOperation {
+        path: "/items/0".parse().unwrap(),
+        value: json!("wrong"),
+    }));
+    let p = Patch(ops);
+    assert!(patch(&mut doc, &p).is_err());
+    assert_eq!(doc, original, "document should be fully restored after failed patch");
+}

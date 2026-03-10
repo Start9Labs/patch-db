@@ -58,7 +58,6 @@ impl Store {
         };
         let mut res = tokio::task::spawn_blocking(move || {
             use std::io::Seek;
-
             let bak = path.with_extension("bak");
             if bak.exists() {
                 std::fs::rename(&bak, &path)?;
@@ -73,16 +72,13 @@ impl Store {
                 fd_lock_rs::LockType::Exclusive,
                 false,
             )?;
-            let mut reader = std::io::BufReader::new(&mut *f);
-            let mut scratch = Vec::new();
-            let mut revision: u64 =
-                ciborium::from_reader_with_buffer(&mut reader, &mut scratch).unwrap_or(0);
-            let mut persistent: Value =
-                ciborium::from_reader_with_buffer(&mut reader, &mut scratch)
-                    .unwrap_or(Value::Null);
-            while let Ok(patch) =
-                ciborium::from_reader_with_buffer::<json_patch::Patch, _>(&mut reader, &mut scratch)
-            {
+            let mut stream =
+                serde_cbor::StreamDeserializer::new(serde_cbor::de::IoRead::new(&mut *f));
+            let mut revision: u64 = stream.next().transpose()?.unwrap_or(0);
+            let mut stream = stream.change_output_type();
+            let mut persistent: Value = stream.next().transpose()?.unwrap_or(Value::Null);
+            let mut stream = stream.change_output_type();
+            while let Some(Ok(patch)) = stream.next() {
                 if let Err(_) = json_patch::patch(&mut persistent, &patch) {
                     #[cfg(feature = "tracing")]
                     tracing::error!("Error applying patch, skipping...");
@@ -180,10 +176,8 @@ impl Store {
         use tokio::io::AsyncWriteExt;
         let bak = self.path.with_extension("bak");
         let bak_tmp = bak.with_extension("bak.tmp");
-        let mut revision_cbor = Vec::new();
-        ciborium::into_writer(&self.revision, &mut revision_cbor)?;
-        let mut data_cbor = Vec::new();
-        ciborium::into_writer(&self.persistent, &mut data_cbor)?;
+        let revision_cbor = serde_cbor::to_vec(&self.revision)?;
+        let data_cbor = serde_cbor::to_vec(&self.persistent)?;
 
         // Phase 1: Create atomic backup. If this fails, the main file is
         // untouched and the caller can safely undo the in-memory patch.
@@ -250,8 +244,7 @@ impl Store {
         tracing::trace!("Attempting to apply patch: {:?}", patch);
 
         // apply patch in memory
-        let mut patch_bin = Vec::new();
-        ciborium::into_writer(&*patch, &mut patch_bin)?;
+        let patch_bin = serde_cbor::to_vec(&*patch)?;
         let mut updated = TentativeUpdated::new(self, &patch)?;
 
         if updated.store.revision % 4096 == 0 {

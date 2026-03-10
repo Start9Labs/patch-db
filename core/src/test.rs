@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use imbl_value::{json, Value};
 use json_ptr::JsonPointer;
-use patch_db::{HasModel, PatchDb, Revision};
+use patch_db::{PatchDb, Revision};
 use proptest::prelude::*;
 use tokio::fs;
 use tokio::runtime::Builder;
@@ -86,20 +86,3 @@ proptest! {
         });
     }
 }
-
-// #[derive(Debug, serde::Deserialize, serde::Serialize, HasModel)]
-// pub struct Sample {
-//     a: String,
-//     #[model]
-//     b: Child,
-// }
-
-// #[derive(Debug, serde::Deserialize, serde::Serialize, HasModel)]
-// pub struct Child {
-//     a: String,
-//     b: usize,
-//     c: NewType,
-// }
-
-// #[derive(Debug, serde::Deserialize, serde::Serialize, HasModel)]
-// pub struct NewType(Option<Box<Sample>>);
