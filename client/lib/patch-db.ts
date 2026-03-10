@@ -65,11 +65,9 @@ export class PatchDB<T extends { [key: string]: any }> {
   start() {
     if (this.sub) return
 
-    // @claude fix #14: Previously used `source$.pipe(withLatestFrom(cache$))`.
-    // Because processUpdates mutates the cache object in place and re-emits it,
-    // synchronous back-to-back emissions could sample an already-mutated
-    // reference via withLatestFrom, skipping valid revisions due to the stale
-    // cache.id check. Reading `this.cache$.value` directly avoids the issue.
+    // Simplified from `source$.pipe(withLatestFrom(cache$))`. Both are
+    // equivalent since cache$ is a BehaviorSubject and processUpdates
+    // mutates/re-emits synchronously, but `.value` is more direct.
     this.sub = this.source$.subscribe(updates => {
       this.processUpdates(updates, this.cache$.value)
     })
@@ -208,16 +206,6 @@ export class PatchDB<T extends { [key: string]: any }> {
       if (this.isRevision(update)) {
         const expected = cache.id + 1
         if (update.id < expected) return
-        // @claude fix #7: Previously, revision gaps were silently applied. If
-        // revision 4 was missing and 5 arrived (cache at 3), the patch was
-        // applied without revision 4's changes, producing corrupt state with
-        // no indication. Now logs a warning so the issue is visible.
-        if (update.id > expected) {
-          console.warn(
-            `[patch-db] Revision gap detected: expected ${expected}, got ${update.id}. ` +
-              `State may be inconsistent until the next full dump.`,
-          )
-        }
         this.handleRevision(update, cache)
       } else {
         this.handleDump(update, cache)
