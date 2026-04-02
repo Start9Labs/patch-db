@@ -35,6 +35,13 @@ impl DiffPatch {
         self.0.prepend(ptr)
     }
 
+    pub fn add(value: Value) -> Self {
+        DiffPatch(Patch(vec![PatchOperation::Add(AddOperation {
+            path: JsonPointer::default(),
+            value,
+        })]))
+    }
+
     pub fn append(&mut self, other: DiffPatch) {
         (self.0).0.extend((other.0).0)
     }

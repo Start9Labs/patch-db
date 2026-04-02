@@ -156,7 +156,10 @@ impl Store {
         ptr: &JsonPointer<S, V>,
         value: &Value,
     ) -> Result<Option<Arc<Revision>>, Error> {
-        let mut patch = diff(ptr.get(&self.persistent).unwrap_or(&Value::Null), value);
+        let mut patch = match ptr.get(&self.persistent) {
+            Some(existing) => diff(existing, value),
+            None => DiffPatch::add(value.clone()),
+        };
         patch.prepend(ptr);
         self.apply(patch).await
     }
