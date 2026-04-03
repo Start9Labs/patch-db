@@ -1,10 +1,9 @@
 [workspace]
 members = [
-    "patch-db",
-    "patch-db-macro",
-    "patch-db-macro-internals",
-    "patch-db-util",
-    "cbor",
+    "core",
+    "macro",
+    "macro-internals",
+    "util",
     "json-patch",
     "json-ptr",
 ]

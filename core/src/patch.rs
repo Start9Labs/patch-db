@@ -35,6 +35,13 @@ impl DiffPatch {
         self.0.prepend(ptr)
     }
 
+    pub fn add(value: Value) -> Self {
+        DiffPatch(Patch(vec![PatchOperation::Add(AddOperation {
+            path: JsonPointer::default(),
+            value,
+        })]))
+    }
+
     pub fn append(&mut self, other: DiffPatch) {
         (self.0).0.extend((other.0).0)
     }
@@ -151,13 +158,26 @@ impl DiffPatch {
                                 .get_segment(arr_path_idx)
                                 .and_then(|seg| seg.parse::<usize>().ok())
                             {
-                                if idx >= onto_idx {
+                                if idx > onto_idx {
                                     let mut new_path = prefix.clone().to_owned();
                                     new_path.push_end_idx(idx - 1);
                                     if let Some(tail) = path.slice(arr_path_idx + 1..) {
                                         new_path.append(&tail);
                                     }
                                     *path = new_path;
+                                } else if idx == onto_idx {
+                                    let new_op = match &*op {
+                                        PatchOperation::Replace(r) => {
+                                            Some(PatchOperation::Add(AddOperation {
+                                                path: r.path.clone(),
+                                                value: r.value.clone(),
+                                            }))
+                                        }
+                                        _ => None,
+                                    };
+                                    if let Some(new_op) = new_op {
+                                        *op = new_op;
+                                    }
                                 }
                             }
                         }

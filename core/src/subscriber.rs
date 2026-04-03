@@ -101,6 +101,9 @@ impl DbWatch {
         let rev =
             ready!(self.subscriber.poll_recv(cx)).ok_or(mpsc::error::TryRecvError::Disconnected)?;
         patch(&mut self.state, &rev.patch.0)?;
+        while let Ok(rev) = self.subscriber.try_recv() {
+            patch(&mut self.state, &rev.patch.0)?;
+        }
         Poll::Ready(Ok(()))
     }
     pub async fn changed(&mut self) -> Result<(), Error> {

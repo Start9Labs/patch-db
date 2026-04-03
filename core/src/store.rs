@@ -8,7 +8,8 @@ use std::sync::Arc;
 
 use fd_lock_rs::FdLock;
 use futures::{Future, FutureExt};
-use imbl_value::{InternedString, Value};
+use imbl::Vector;
+use imbl_value::{InOMap, InternedString, Value};
 use json_patch::PatchError;
 use json_ptr::{JsonPointer, SegList, ROOT};
 use lazy_static::lazy_static;
@@ -23,7 +24,8 @@ use crate::subscriber::Broadcast;
 use crate::{DbWatch, Error, HasModel, Subscriber};
 
 lazy_static! {
-    static ref OPEN_STORES: Mutex<HashMap<PathBuf, Arc<Mutex<()>>>> = Mutex::new(HashMap::new());
+    static ref OPEN_STORES: std::sync::Mutex<HashMap<PathBuf, Arc<Mutex<()>>>> =
+        std::sync::Mutex::new(HashMap::new());
 }
 
 pub struct Store {
@@ -42,7 +44,7 @@ impl Store {
                 tokio::fs::File::create(path.as_ref()).await?;
             }
             let path = tokio::fs::canonicalize(path).await?;
-            let mut lock = OPEN_STORES.lock().await;
+            let mut lock = OPEN_STORES.lock().unwrap();
             (
                 if let Some(open) = lock.get(&path) {
                     open.clone().try_lock_owned()?
@@ -56,7 +58,6 @@ impl Store {
         };
         let mut res = tokio::task::spawn_blocking(move || {
             use std::io::Seek;
-
             let bak = path.with_extension("bak");
             if bak.exists() {
                 std::fs::rename(&bak, &path)?;
@@ -75,7 +76,7 @@ impl Store {
                 serde_cbor::StreamDeserializer::new(serde_cbor::de::IoRead::new(&mut *f));
             let mut revision: u64 = stream.next().transpose()?.unwrap_or(0);
             let mut stream = stream.change_output_type();
-            let mut persistent = stream.next().transpose()?.unwrap_or_else(|| Value::Null);
+            let mut persistent: Value = stream.next().transpose()?.unwrap_or(Value::Null);
             let mut stream = stream.change_output_type();
             while let Some(Ok(patch)) = stream.next() {
                 if let Err(_) = json_patch::patch(&mut persistent, &patch) {
@@ -105,7 +106,8 @@ impl Store {
             })
         })
         .await??;
-        res.compress().await?;
+        let mut _committed = false;
+        res.compress(&mut _committed).await?;
         Ok(res)
     }
     pub async fn close(mut self) -> Result<(), Error> {
@@ -113,7 +115,7 @@ impl Store {
 
         self.file.flush().await?;
         self.file.shutdown().await?;
-        self.file.unlock(true).map_err(|e| e.1)?;
+
         Ok(())
     }
     pub(crate) fn exists<S: AsRef<str>, V: SegList>(&self, ptr: &JsonPointer<S, V>) -> bool {
@@ -154,7 +156,10 @@ impl Store {
         ptr: &JsonPointer<S, V>,
         value: &Value,
     ) -> Result<Option<Arc<Revision>>, Error> {
-        let mut patch = diff(ptr.get(&self.persistent).unwrap_or(&Value::Null), value);
+        let mut patch = match ptr.get(&self.persistent) {
+            Some(existing) => diff(existing, value),
+            None => DiffPatch::add(value.clone()),
+        };
         patch.prepend(ptr);
         self.apply(patch).await
     }
@@ -165,26 +170,46 @@ impl Store {
     ) -> Result<Option<Arc<Revision>>, Error> {
         self.put_value(ptr, &imbl_value::to_value(&value)?).await
     }
-    pub(crate) async fn compress(&mut self) -> Result<(), Error> {
+    /// Compresses the database file by writing a fresh snapshot.
+    ///
+    /// Sets `*committed = true` once the atomic backup rename succeeds (point
+    /// of no return — the new state will be recovered on restart regardless of
+    /// main file state).  Before that point, the caller can safely undo.
+    pub(crate) async fn compress(&mut self, committed: &mut bool) -> Result<(), Error> {
         use tokio::io::AsyncWriteExt;
         let bak = self.path.with_extension("bak");
         let bak_tmp = bak.with_extension("bak.tmp");
-        let mut backup_file = File::create(&bak_tmp).await?;
         let revision_cbor = serde_cbor::to_vec(&self.revision)?;
         let data_cbor = serde_cbor::to_vec(&self.persistent)?;
+
+        // Phase 1: Create atomic backup. If this fails, the main file is
+        // untouched and the caller can safely undo the in-memory patch.
+        let mut backup_file = File::create(&bak_tmp).await?;
         backup_file.write_all(&revision_cbor).await?;
         backup_file.write_all(&data_cbor).await?;
         backup_file.flush().await?;
         backup_file.sync_all().await?;
         tokio::fs::rename(&bak_tmp, &bak).await?;
+        *committed = true;
+
+        // Point of no return: the backup exists with the new state. On restart,
+        // Store::open will rename it over the main file. From here, errors
+        // must NOT cause an in-memory undo.
+
+        // Phase 2: Rewrite main file. If this fails, the backup ensures crash
+        // recovery. We propagate the error but signal that undo is unsafe.
         self.file.set_len(0).await?;
         self.file.seek(SeekFrom::Start(0)).await?;
         self.file.write_all(&revision_cbor).await?;
         self.file.write_all(&data_cbor).await?;
         self.file.flush().await?;
         self.file.sync_all().await?;
-        tokio::fs::remove_file(&bak).await?;
         self.file_cursor = self.file.stream_position().await?;
+
+        // Phase 3: Remove backup. Non-fatal — on restart, the backup (which
+        // matches the main file) will be harmlessly applied.
+        let _ = tokio::fs::remove_file(&bak).await;
+
         Ok(())
     }
     pub(crate) async fn apply(&mut self, patch: DiffPatch) -> Result<Option<Arc<Revision>>, Error> {
@@ -226,7 +251,12 @@ impl Store {
         let mut updated = TentativeUpdated::new(self, &patch)?;
 
         if updated.store.revision % 4096 == 0 {
-            updated.store.compress().await?
+            let mut committed = false;
+            let res = updated.store.compress(&mut committed).await;
+            if committed {
+                updated.undo.take();
+            }
+            res?;
         } else {
             if updated.store.file.stream_position().await? != updated.store.file_cursor {
                 updated
@@ -253,6 +283,45 @@ impl Store {
         self.broadcast.send(&res);
 
         Ok(Some(res))
+    }
+}
+
+// Iterative drop to prevent stack overflow when dropping deeply nested Value trees.
+// Without this, the compiler-generated recursive Drop can exhaust the call stack.
+impl Drop for Store {
+    fn drop(&mut self) {
+        if let Ok(mut lock) = OPEN_STORES.lock() {
+            lock.remove(&self.path);
+        }
+
+        // Only Array and Object can cause deep recursion
+        match &self.persistent {
+            Value::Array(vec) if !vec.is_empty() => {}
+            Value::Object(map) if !map.is_empty() => {}
+            _ => return,
+        }
+
+        fn take_children(value: &mut Value, stack: &mut Vec<Value>) {
+            match value {
+                Value::Array(vec) => {
+                    stack.extend(std::mem::take(vec));
+                }
+                Value::Object(map) => {
+                    let vec: Vector<(InternedString, Value)> =
+                        std::mem::replace(map, InOMap::new()).into();
+                    stack.extend(vec.into_iter().map(|(_, v)| v));
+                }
+                _ => {}
+            }
+        }
+
+        let mut stack = Vec::new();
+        take_children(&mut self.persistent, &mut stack);
+        while let Some(mut value) = stack.pop() {
+            take_children(&mut value, &mut stack);
+            // `value` drops here with an empty container,
+            // so the recursive Drop::drop returns immediately
+        }
     }
 }
 
@@ -314,6 +383,11 @@ impl PatchDb {
         Ok(PatchDb {
             store: Arc::new(RwLock::new(Store::open(path).await?)),
         })
+    }
+    pub async fn close(self) {
+        if let Ok(store) = Arc::try_unwrap(self.store) {
+            let _ = store.into_inner().close().await;
+        }
     }
     pub async fn dump<S: AsRef<str>, V: SegList>(&self, ptr: &JsonPointer<S, V>) -> Dump {
         self.store.read().await.dump(ptr)
@@ -393,10 +467,11 @@ impl PatchDb {
         Fut: std::future::Future<Output = Result<(Value, T), E>> + UnwindSafe,
         E: From<Error>,
     {
-        let store = self.store.read().await;
-        let old = store.persistent.clone();
-        drop(store);
         loop {
+            let store = self.store.read().await;
+            let old = store.persistent.clone();
+            drop(store);
+
             let (new, res) = async { f(old.clone()).await }
                 .catch_unwind()
                 .await
@@ -408,11 +483,12 @@ impl PatchDb {
                     )
                 })??;
             let mut store = self.store.write().await;
-            if &old == &store.persistent {
+            if old == store.persistent {
                 let diff = diff(&store.persistent, &new);
                 store.apply(diff).await?;
                 return Ok((new, res));
             }
+            // State changed since we read it; retry with the fresh value
         }
     }
 }

@@ -12,6 +12,6 @@ proc-macro = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-patch-db-macro-internals = { path = "../patch-db-macro-internals" }
+patch-db-macro-internals = { path = "../macro-internals" }
 syn = "1.0.62"
 proc-macro2 = "1.0.1"
