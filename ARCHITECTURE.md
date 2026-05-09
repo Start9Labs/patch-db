@@ -48,7 +48,17 @@ patch-db/
 
 ### `core` (crate name: `patch-db`)
 
-The main database engine. Key types:
+The main database engine. Source layout:
+
+| File | Contents |
+|------|------|
+| `core/src/store.rs` | `PatchDb`, `TypedPatchDb`, `Store`, `MutateResult` |
+| `core/src/patch.rs` | `Revision`, `Dump`, `DiffPatch`, `diff()` |
+| `core/src/subscriber.rs` | `DbWatch`, `TypedDbWatch`, `Subscriber`, `Broadcast` |
+| `core/src/model.rs` | `HasModel`, `Model`, `ModelExt`, `Pointer` |
+| `core/src/lib.rs` | `Error` enum, re-exports |
+
+Key types:
 
 | Type | Role |
 |------|------|
